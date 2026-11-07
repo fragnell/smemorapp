@@ -4,7 +4,7 @@
 // which downloads a fresh copy of every file. The `?v=` query bypasses the CDN's ~10 min cache,
 // so the new version never stores an old file. The app is then served from that copy (cache-first),
 // with no background refresh that could overwrite it with a stale copy from the CDN.
-const VERSION = 6;
+const VERSION = 7;
 const CACHE = `smemorapp-v${VERSION}`;
 const ASSETS = [
   './',
