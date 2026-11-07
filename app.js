@@ -289,6 +289,7 @@ function brushBar(where) {
   let hint;
   if (ui.brush === 'edit') hint = where === 'floor' ? 'Trascina per spostare. Tocca per modificare o aggiungere una nota.' : 'Tocca un pulsante per modificarlo o aggiungere una nota.';
   else if (ui.brush === 'clear') hint = 'Tocca per togliere il segno.';
+  else if (ui.brush === 'V') hint = 'Tocca per segnare <b>Visita ulteriore</b> e scrivere una nota.';
   else hint = `Tocca per segnare <b>${STATUS[ui.brush]}</b>. Tieni premuto per la nota.`;
   return `<div class="brushbar" role="toolbar" aria-label="Strumento">${bar}</div><p class="hint">${hint}</p>`;
 }
@@ -354,7 +355,9 @@ function viewFloor(b, f) {
   $('#view').innerHTML = `
     <p class="subtitle">${esc(b.name)}</p>
     <div class="floor-nav">
-      ${up ? `<a class="btn small" href="#/b/${b.id}/f/${up.id}" aria-label="Piano sopra">${I.up}<span>${esc(up.label)}</span></a>` : '<span></span>'}
+      ${up ? `<a class="btn small" href="#/b/${b.id}/f/${up.id}" aria-label="Piano sopra">${I.up}<span>${esc(up.label)}</span></a>`
+        : `<button class="btn small add-floor" data-act="floor-quick" aria-label="Aggiungi ${esc(floorName(f.num + 1))} uguale a questo">${I.plus}<span>${esc(floorName(f.num + 1))}</span></button>`}
+      <button class="btn small icon-only" data-act="floor-plus" aria-label="Aggiungi piano" title="Aggiungi piano">${I.plus}</button>
       ${down ? `<a class="btn small" href="#/b/${b.id}/f/${down.id}" aria-label="Piano sotto"><span>${esc(down.label)}</span>${I.down}</a>` : '<span></span>'}
     </div>
     ${brushBar('floor')}
@@ -399,7 +402,7 @@ function bindCanvas(b, f) {
     if (e.type === 'pointercancel') { render(); return; }
     if (d.long) { swallowNextClick(); return; }
     if (d.moved) { commit(() => { d.it.x = round1(d.nx); d.it.y = round1(d.ny); touch(b); }); return; }
-    if (d.it.type === 'door' && ui.brush !== 'edit') applyBrush(b, d.it, doorName(d.it));
+    if (d.it.type === 'door' && ui.brush !== 'edit') applyBrush(b, d.it, doorName(d.it), true);
     else { swallowNextClick(); openItemSheet(b, f, d.it); }
   };
   cv.addEventListener('pointerup', end);
@@ -408,11 +411,37 @@ function bindCanvas(b, f) {
 const doorName = (d) => d.label ? `Porta ${d.label}` : 'Porta';
 const cellName = (c) => c.label ? `Pulsante ${c.label}` : 'Pulsante';
 
-function applyBrush(b, obj, name) {
+// viaPointer: the tap came from pointer events (floor canvas), so a click will follow and must not hit the sheet.
+function applyBrush(b, obj, name, viaPointer) {
+  const openNote = () => { if (viaPointer) swallowNextClick(); sheetNote(b, obj, name); };
+  // V on a door already marked V: edit its note instead of removing the mark (use Pulisci for that).
+  if (ui.brush === 'V' && obj.status === 'V') { openNote(); return; }
   const st = ui.brush === 'clear' ? '' : (obj.status === ui.brush ? '' : ui.brush);
   if (st === obj.status) return;
   vibrate();
-  commit(() => { setStatus(obj, st); touch(b); }, `${name}: ${st ? STATUS[st] : 'nessun segno'}`);
+  commit(() => { setStatus(obj, st); touch(b); }, st === 'V' ? null : `${name}: ${st ? STATUS[st] : 'nessun segno'}`);
+  if (st === 'V') openNote();
+}
+
+function sheetNote(b, obj, name) {
+  openSheet(`
+    <h2><span class="pill s-V">V</span> ${esc(name)}: visita ulteriore</h2>
+    <label class="field"><span>Nota (facoltativa)</span><textarea id="n-note" rows="3" maxlength="500" placeholder="Es. argomento trattato, quando ritornare… Evita nomi e dati personali.">${esc(obj.note)}</textarea></label>
+    <div class="sheet-actions">
+      <button class="btn danger-ghost" data-act="unmark">Togli V</button>
+      <button class="btn" data-act="cancel">Salta</button>
+      <button class="btn primary" data-act="ok">Salva nota</button>
+    </div>`, (sh) => {
+    const ta = $('#n-note', sh);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    on(sh, 'ok', () => {
+      const note = ta.value.trim();
+      closeSheet();
+      if (note !== obj.note) commit(() => { obj.note = note; obj.date = now(); touch(b); }, 'Nota salvata');
+    });
+    on(sh, 'unmark', () => { closeSheet(); commit(() => { setStatus(obj, ''); touch(b); }, `${name}: nessun segno`); });
+  });
 }
 
 function openItemSheet(b, f, it) {
@@ -637,24 +666,29 @@ const actions = {
         commit(() => { f.num = n; f.label = label; touch(b); }, 'Piano aggiornato');
       });
       on(sh, 'fm-template', () => sheetTemplate(b, f));
-      on(sh, 'fm-dup', () => {
-        const n = Math.max(...b.floors.map((x) => x.num)) + 1;
-        const doors = doorsOf(f);
-        const numeric = doors.length && doors.every((d) => /^\d+$/.test(d.label));
-        const nf = {
-          id: uid(), num: n, label: floorName(n),
-          items: f.items.map((i) => mark({ type: i.type, x: i.x, y: i.y, label: i.type === 'door' && numeric ? String(int(i.label, 0) + doors.length) : (i.type === 'door' ? '' : i.label) })),
-        };
-        closeSheet();
-        commit(() => { b.floors.push(nf); touch(b); }, `Creato ${nf.label}`, { rerender: false });
-        location.hash = `#/b/${b.id}/f/${nf.id}`;
-      });
+      on(sh, 'fm-dup', () => { closeSheet(); copyFloor(b, f, topFloorNum(b) + 1); });
       on(sh, 'fm-del', () => {
         if (!confirm(`Eliminare "${f.label}"?`)) return;
         closeSheet();
         commit(() => { b.floors = b.floors.filter((x) => x !== f); touch(b); }, 'Piano eliminato', { rerender: false });
         location.hash = `#/b/${b.id}`;
       });
+    });
+  },
+
+  'floor-quick': () => copyFloor(cur.b, cur.f, cur.f.num + 1),
+  'floor-plus': () => {
+    const { b, f } = cur;
+    const n = topFloorNum(b) + 1;
+    openSheet(`
+      <h2>Aggiungi piano</h2>
+      <div class="menu-list">
+        <button class="btn" data-act="fp-copy">${I.copy} ${esc(floorName(n))} uguale a ${esc(f.label)}</button>
+        <button class="btn" data-act="fp-tpl">${I.layout} Scegli uno schema o più piani…</button>
+      </div>
+      <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button></div>`, (sh) => {
+      on(sh, 'fp-copy', () => { closeSheet(); copyFloor(b, f, n); });
+      on(sh, 'fp-tpl', () => actions['floors-add']());
     });
   },
 
@@ -674,6 +708,24 @@ const actions = {
     commit(() => { db.buildings = []; }, 'Tutti i dati eliminati');
   },
 };
+
+const topFloorNum = (b) => Math.max(...b.floors.map((x) => x.num));
+
+// New floor `num` with the same layout as `f` (no marks). Numeric door labels continue the sequence.
+function copyFloor(b, f, num) {
+  const doors = doorsOf(f);
+  const shift = doors.length * (num - f.num);
+  const numeric = doors.length && doors.every((d) => /^\d+$/.test(d.label) && int(d.label, 0) + shift > 0);
+  const nf = {
+    id: uid(), num, label: floorName(num),
+    items: f.items.map((i) => mark({
+      type: i.type, x: i.x, y: i.y,
+      label: i.type !== 'door' ? i.label : numeric ? String(int(i.label, 0) + shift) : '',
+    })),
+  };
+  commit(() => { b.floors.push(nf); touch(b); }, `Creato ${nf.label}`, { rerender: false });
+  location.hash = `#/b/${b.id}/f/${nf.id}`;
+}
 
 function sheetTemplate(b, f) {
   let tpl = null;
