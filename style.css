@@ -165,7 +165,8 @@ h2 { font-size: 19px; margin: 6px 0 4px; }
 .tab svg { width: 18px; height: 18px; }
 
 /* brush toolbar */
-.brushbar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 12px 0 0; }
+.brushbar { display: grid; grid-template-columns: repeat(var(--n, 5), minmax(0, 1fr)); gap: 6px; margin: 12px 0 0; }
+.brush span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brush {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
   min-height: 56px; padding: 4px 2px;
@@ -191,6 +192,19 @@ h2 { font-size: 19px; margin: 6px 0 4px; }
 .cell-label { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .cell-st { font-size: 24px; font-weight: 800; }
 .cell.marked { border-color: var(--c); background: var(--cb); color: var(--c); }
+.slot {
+  display: grid; place-items: center; min-height: 58px; padding: 0;
+  border: 2px dashed var(--border); border-radius: 10px; background: transparent; color: var(--muted);
+}
+div.slot { opacity: .45; }
+.slot svg { width: 22px; height: 22px; }
+.slot.target { border-color: var(--primary); }
+.intercom.moving .cell { touch-action: none; cursor: grab; }
+.cell.sel { outline: 3px solid var(--primary); outline-offset: 2px; }
+.cell.dragging { position: relative; z-index: 5; opacity: .9; box-shadow: 0 8px 20px rgba(0, 0, 0, .3); cursor: grabbing; }
+.cell.drop, .slot.drop { outline: 3px solid var(--primary); outline-offset: 1px; background: var(--surface-2); }
+.steppers { display: flex; flex-wrap: wrap; gap: 8px 16px; width: 100%; }
+.steppers .stepper { margin-right: 0; }
 .note-dot { position: absolute; top: 4px; right: 4px; width: 9px; height: 9px; border-radius: 50%; background: var(--primary); border: 1.5px solid var(--surface); }
 
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
