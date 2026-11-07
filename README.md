@@ -20,8 +20,11 @@ Web app (PWA) per il ministero di casa in casa: schemi di **citofoni** e **piane
 7. **Condividi** (icona in alto nel civico o nella piantina):
    - *Immagini* con schema, A/N/V e note, per chi non usa l'app;
    - *Testo* con lo stesso contenuto;
-   - *File per l'app*: chi usa Smemorapp lo apre con l'icona "Importa note ricevute" nella prima pagina.
-     Si aggiunge ai suoi dati (se aveva già quel civico o quella piantina, vengono aggiornati).
+   - *Link per l'app*: un messaggio con un link che contiene le note. Chi usa Smemorapp lo tocca e le importa.
+     Se il link si apre fuori dall'app (es. su iPhone in Safari): copia il messaggio, apri Smemorapp,
+     tocca ⬇ "Importa note ricevute" e poi "Incolla".
+     Le note si aggiungono ai suoi dati (se aveva già quel civico o quella piantina, vengono aggiornati).
+     La foto della piantina non è nel link: va con le immagini, oppure con "invia come file".
 
 ## Provarla sul computer
 ```bash
