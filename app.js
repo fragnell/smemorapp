@@ -47,6 +47,7 @@ const I = {
   share: '<svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M8.2 10.8l7.6-4.4M8.2 13.2l7.6 4.4"/></svg>',
   inbox: '<svg viewBox="0 0 24 24"><path d="M12 3v11M8 10l4 4 4-4"/><path d="M4 14v5a1 1 0 001 1h14a1 1 0 001-1v-5"/></svg>',
   text: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 11h16M4 16h10"/></svg>',
+  paste: '<svg viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6"/></svg>',
   download: '<svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
   upload: '<svg viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></svg>',
   door: '<svg viewBox="0 0 24 24"><path d="M6 21V4a1 1 0 011-1h10a1 1 0 011 1v17M3 21h18"/><circle cx="14.5" cy="12" r=".8"/></svg>',
@@ -309,6 +310,13 @@ function render() {
     if (!m) { location.replace('#/'); return; }
     return viewMap(m);
   }
+  if (parts[0] === 'import') {
+    // Drop the long code from the address bar and history, then show home and import.
+    history.replaceState(null, '', `${location.pathname}#/`);
+    viewHome();
+    if (parts[1]) importFromLink(parts[1]);
+    return;
+  }
   if (parts[0] === 'settings') return viewSettings();
   return viewHome();
 }
@@ -462,10 +470,9 @@ function viewHome() {
   document.title = 'Smemorapp';
   topbar({
     title: 'Smemorapp',
-    actions: `<label class="icon-btn" aria-label="Importa note ricevute" title="Importa note ricevute">${I.inbox}<input type="file" id="home-imp" accept=".txt,.json,text/plain,application/json" hidden></label>
+    actions: `<button class="icon-btn" data-act="import" aria-label="Importa note ricevute" title="Importa note ricevute">${I.inbox}</button>
       <a class="icon-btn" href="#/settings" aria-label="Backup e impostazioni">${I.settings}</a>`,
   });
-  $('#home-imp').addEventListener('change', onImportInput);
   const empty = !db.buildings.length && !db.maps.length;
   $('#view').innerHTML = `
     ${empty ? '' : `<input class="search" type="search" id="search" placeholder="Cerca piantina, via o civico…" value="${esc(ui.search)}" autocomplete="off">
@@ -1041,6 +1048,7 @@ const actions = {
     if (n) sheetNoteView(b, n.obj, n.name);
   },
   share: () => sheetShare(cur.m ? { m: cur.m } : { b: cur.b }),
+  import: () => sheetImport(),
   tab: (el) => { ui.tabs[cur.b.id] = el.dataset.tab; saveUi(); render(); },
   brush: (el) => { ui.brush = el.dataset.b; ui.moveSel = null; render(); },
 
@@ -1697,20 +1705,70 @@ async function buildImages(what) {
   return files;
 }
 
-// File for another Smemorapp user. Shared as .txt because phones refuse to share .json files.
-async function buildShareFile(what) {
+// What another Smemorapp user receives: the civico, or the piantina with its civici.
+async function sharePayload(what, withPhoto) {
   const out = { kind: 'smemorapp-share', version: 2, sharedAt: now(), maps: [], buildings: [] };
-  let name;
   if (what.m) {
     const m = what.m;
-    out.maps.push(m.hasPhoto ? { ...m, photo: await photos.get(m.id) } : { ...m });
+    out.maps.push(withPhoto && m.hasPhoto ? { ...m, photo: await photos.get(m.id) } : { ...m });
     out.buildings = mapBuildings(m);
-    name = mapTitle(m);
   } else {
     out.buildings = [what.b];
-    name = what.b.name;
   }
-  return new File([JSON.stringify(out)], `${slug(name)}.smemorapp.txt`, { type: 'text/plain' });
+  return out;
+}
+// File version (includes the photo). Shared as .txt because phones refuse to share .json files.
+async function buildShareFile(what) {
+  const name = what.m ? mapTitle(what.m) : what.b.name;
+  return new File([JSON.stringify(await sharePayload(what, true))], `${slug(name)}.smemorapp.txt`, { type: 'text/plain' });
+}
+
+// Link version: the notes travel inside the link (#/import/<code>), compressed and base64url-encoded.
+// Tapping it opens Smemorapp and imports; the same message can also be copied and pasted in the app.
+const b64url = {
+  enc(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  },
+  dec(str) {
+    const s = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  },
+};
+const pipeBytes = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+async function encodeShare(obj) {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  if (typeof CompressionStream === 'function') return 'Z' + b64url.enc(await pipeBytes(bytes, new CompressionStream('deflate-raw')));
+  return 'J' + b64url.enc(bytes);
+}
+async function decodeShare(code) {
+  let bytes = b64url.dec(code.slice(1));
+  if (code[0] === 'Z') {
+    if (typeof DecompressionStream !== 'function') throw new Error('unsupported');
+    bytes = await pipeBytes(bytes, new DecompressionStream('deflate-raw'));
+  } else if (code[0] !== 'J') {
+    throw new Error('bad code');
+  }
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+const SHARE_MAX = 60000; // WhatsApp messages stop at ~65k characters
+async function buildShareMessage(what) {
+  const code = await encodeShare(await sharePayload(what, false));
+  const url = `${location.origin}${location.pathname}#/import/${code}`;
+  const title = what.m ? mapTitle(what.m) : what.b.name;
+  const lines = [
+    `📥 Note Smemorapp: ${title}`,
+    'Tocca il link per aprirle in Smemorapp:',
+    url,
+    '',
+    "Se il link non si apre nell'app: tieni premuto questo messaggio, Copia, poi in Smemorapp tocca ⬇ in alto e Incolla.",
+  ];
+  if (what.m && what.m.hasPhoto) lines.push('', 'La foto della piantina non è nel link: la ricevi con le immagini.');
+  const text = lines.join('\n');
+  return { text, tooLong: text.length > SHARE_MAX };
 }
 
 function downloadFiles(files) {
@@ -1754,15 +1812,31 @@ function sheetShare(what) {
     </div>
     <div class="share-opt">
       <h3>Per chi usa Smemorapp</h3>
-      <p class="muted small">Un file da aprire in Smemorapp con il pulsante ${I.inbox} "Importa note ricevute" nella prima pagina. Vedrà tutto come te e potrà continuare a segnare.</p>
-      <button class="btn" data-act="sh-file">${I.download} Condividi file per l'app</button>
+      <p class="muted small">Invia un link: chi lo riceve lo tocca e le note si aprono in Smemorapp, pronte da importare. Vedrà tutto come te e potrà continuare a segnare.</p>
+      <button class="btn primary" data-act="sh-link" disabled>${I.share} Invia link per l'app</button>
+      <button class="btn ghost small" data-act="sh-file">${I.download} Oppure invia come file${what.m && what.m.hasPhoto ? ' (con la foto)' : ''}</button>
     </div>
     <div class="sheet-actions"><button class="btn" data-act="cancel">Chiudi</button></div>`, (sh) => {
     const prev = $('#sh-prev', sh);
     const imgBtn = $('[data-act="sh-img"]', sh);
+    const linkBtn = $('[data-act="sh-link"]', sh);
     const urls = [];
     let imgFiles = null;
     let appFile = null;
+    let message = null;
+    buildShareMessage(what).then((msg) => { message = msg; linkBtn.disabled = false; }).catch((e) => {
+      console.error(e);
+      linkBtn.textContent = 'Link non disponibile su questo dispositivo';
+    });
+    on(sh, 'sh-link', () => {
+      if (!message) return;
+      if (message.tooLong) {
+        toast('Troppe note per un solo messaggio: invio un file');
+        if (appFile) shareOrDownload([appFile], title);
+        return;
+      }
+      shareText(message.text, title);
+    });
     buildImages(what).then((files) => {
       imgFiles = files;
       if (!sh.isConnected) return;
@@ -1818,15 +1892,83 @@ async function importShared(raw) {
     ? `${mapTitle(data.maps[0])} con ${data.buildings.length} civic${data.buildings.length === 1 ? 'o' : 'i'}`
     : data.buildings.map((b) => b.name).join(', ');
   if (!confirm(`Note ricevute: ${what}.\nAggiungerle alle tue?${updates ? '\nQuelle che hai già verranno aggiornate con questa versione.' : ''}`)) return;
-  for (const m of raw.maps || []) {
-    if (typeof m.photo === 'string' && m.photo.startsWith('data:image/')) await photos.set(String(m.id), m.photo);
-  }
+  // The link carries no photo: keep a photo already received before, and never point at a missing one.
+  const rawPhotos = new Map((raw.maps || [])
+    .filter((m) => typeof m.photo === 'string' && m.photo.startsWith('data:image/'))
+    .map((m) => [String(m.id), m.photo]));
+  for (const [id, src] of rawPhotos) await photos.set(id, src);
+  data.maps.forEach((m) => { const old = getM(m.id); m.hasPhoto = rawPhotos.has(m.id) || !!(old && old.hasPhoto); });
   commit(() => {
     const put = (list, x) => { const i = list.findIndex((y) => y.id === x.id); if (i >= 0) list[i] = x; else list.push(x); };
     data.maps.forEach((m) => put(db.maps, m));
     data.buildings.forEach((b) => { if (!getM(b.mapId)) b.mapId = ''; put(db.buildings, b); });
   }, 'Note importate', { rerender: false });
   go(data.maps.length ? `#/m/${data.maps[0].id}` : `#/b/${data.buildings[0].id}`);
+}
+
+async function importCode(code) {
+  let raw;
+  try { raw = await decodeShare(code); }
+  catch (e) {
+    toast(e.message === 'unsupported' ? 'Aggiorna il browser per importare queste note' : 'Link non valido o incompleto');
+    return;
+  }
+  if (!raw || raw.kind !== 'smemorapp-share') { toast('Link non valido'); return; }
+  importShared(raw);
+}
+// The pasted text can be the whole WhatsApp message, just the link, or the content of a shared file.
+function importFromText(text) {
+  const m = /#\/import\/([A-Za-z0-9_-]+)/.exec(text || '');
+  if (m) { closeSheet(); importCode(m[1]); return true; }
+  try {
+    const raw = JSON.parse(text);
+    if (raw && raw.kind === 'smemorapp-share') { closeSheet(); importShared(raw); return true; }
+  } catch (e) { /* not JSON */ }
+  return false;
+}
+// Opened from a link (#/import/<code>). On iPhone a link opens Safari, whose data is separate
+// from the app on the Home screen, so explain how to paste it there instead.
+function importFromLink(code) {
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  if (!ios || standalone) { importCode(code); return; }
+  openSheet(`
+    <h2>Importa note ricevute</h2>
+    <p>Il link si è aperto in Safari. Se usi Smemorapp dalla schermata Home, le note vanno messe lì:
+    torna su WhatsApp, tieni premuto il messaggio e scegli <b>Copia</b>, poi apri Smemorapp, tocca ${I.inbox} in alto e <b>Incolla</b>.</p>
+    <div class="sheet-actions">
+      <button class="btn" data-act="cancel">Ho capito</button>
+      <button class="btn primary" data-act="ok">Importa qui in Safari</button>
+    </div>`, (sh) => on(sh, 'ok', () => { closeSheet(); importCode(code); }));
+}
+
+function sheetImport() {
+  openSheet(`
+    <h2>Importa note ricevute</h2>
+    <p class="muted small">Hai ricevuto un messaggio con un link di Smemorapp? Toccare il link di solito basta.
+    Altrimenti tieni premuto il messaggio, scegli <b>Copia</b> e poi:</p>
+    <button class="btn primary" data-act="paste">${I.paste} Incolla il messaggio copiato</button>
+    <label class="field"><span>Oppure incollalo qui (tieni premuto nel riquadro → Incolla)</span>
+      <textarea id="imp-text" rows="3"></textarea></label>
+    <button class="btn" data-act="ok">Importa il testo incollato</button>
+    <div class="share-opt">
+      <h3>Hai un file?</h3>
+      <label class="btn">${I.upload} Scegli file<input type="file" id="imp-file" accept=".txt,.json,text/plain,application/json" hidden></label>
+    </div>
+    <div class="sheet-actions"><button class="btn" data-act="cancel">Chiudi</button></div>`, (sh) => {
+    const ta = $('#imp-text', sh);
+    $('#imp-file', sh).addEventListener('change', (e) => { closeSheet(); onImportInput(e); });
+    on(sh, 'paste', async () => {
+      let text = '';
+      try { text = await navigator.clipboard.readText(); }
+      catch (err) { toast('Tieni premuto nel riquadro e scegli Incolla'); ta.focus(); return; }
+      if (!importFromText(text)) { ta.value = text; toast('Nel testo copiato non trovo note di Smemorapp'); }
+    });
+    on(sh, 'ok', () => {
+      if (!ta.value.trim()) { ta.focus(); return; }
+      if (!importFromText(ta.value)) toast('Nel testo non trovo note di Smemorapp');
+    });
+  });
 }
 
 // ----- settings -----
