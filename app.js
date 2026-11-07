@@ -42,6 +42,8 @@ const I = {
   map: '<svg viewBox="0 0 24 24"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>',
   camera: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  image: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+  move: '<svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg>',
   download: '<svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
   upload: '<svg viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></svg>',
   door: '<svg viewBox="0 0 24 24"><path d="M6 21V4a1 1 0 011-1h10a1 1 0 011 1v17M3 21h18"/><circle cx="14.5" cy="12" r=".8"/></svg>',
@@ -72,6 +74,32 @@ const tplItems = (t) => t.items.map(([type, x, y]) => mark({ type, x, y }));
 function normMark(c) {
   return { id: String(c.id || uid()), label: String(c.label || ''), status: STATUS[c.status] ? c.status : '', note: String(c.note || ''), date: c.date || '' };
 }
+// Intercom buttons sit at fixed grid slots (r, c), so deleting one leaves a gap and odd layouts are possible.
+// Older data had no positions: those buttons are placed row by row.
+const IC_MAX_COLS = 6;
+const IC_MAX_ROWS = 40;
+function normIntercom(ic) {
+  ic = ic || {};
+  const cols = clamp(int(ic.cols, 2), 1, IC_MAX_COLS);
+  const raw = Array.isArray(ic.cells) ? ic.cells : [];
+  const used = new Set();
+  const cells = raw.map((x) => {
+    const c = normMark(x);
+    let r = int(x.r, -1);
+    let col = int(x.c, -1);
+    if (r < 0 || col < 0 || col >= cols || r >= IC_MAX_ROWS || used.has(`${r}:${col}`)) {
+      let k = 0;
+      while (used.has(`${Math.floor(k / cols)}:${k % cols}`)) k++;
+      r = Math.floor(k / cols);
+      col = k % cols;
+    }
+    used.add(`${r}:${col}`);
+    return { ...c, r, c: col };
+  });
+  const rows = clamp(Math.max(int(ic.rows, 0), 1, ...cells.map((c) => c.r + 1)), 1, IC_MAX_ROWS);
+  return { cols, rows, cells };
+}
+
 function normalize(d) {
   if (!d || !Array.isArray(d.buildings)) throw new Error('Formato non valido');
   return {
@@ -91,10 +119,7 @@ function normalize(d) {
       note: String(b.note || ''),
       createdAt: b.createdAt || now(),
       updatedAt: b.updatedAt || now(),
-      intercom: {
-        cols: clamp(int(b.intercom && b.intercom.cols, 2), 1, 6),
-        cells: ((b.intercom && b.intercom.cells) || []).map(normMark),
-      },
+      intercom: normIntercom(b.intercom),
       floors: (b.floors || []).map((f) => ({
         id: String(f.id || uid()),
         num: int(f.num, 0),
@@ -200,7 +225,7 @@ function setStatus(obj, st) { obj.status = st || ''; obj.date = now(); }
 
 // ---------- UI state ----------
 const UI_KEY = 'smemorapp.ui';
-const ui = { brush: 'edit', tabs: {}, search: '' };
+const ui = { brush: 'edit', tabs: {}, search: '', moveSel: null };
 try { Object.assign(ui.tabs, JSON.parse(localStorage.getItem(UI_KEY) || '{}').tabs); } catch (e) { /* ignore */ }
 const saveUi = () => { try { localStorage.setItem(UI_KEY, JSON.stringify({ tabs: ui.tabs })); } catch (e) { /* ignore */ } };
 let cur = { b: null, f: null };
@@ -322,7 +347,8 @@ function sheetMap(m) {
     <div class="field"><span>Foto della piantina (facoltativa)</span>
       <div class="photo-pick">
         <img id="p-prev" alt="" hidden>
-        <label class="btn small">${I.camera}<span id="p-pick-label">${m && m.hasPhoto ? 'Cambia foto' : 'Scatta o scegli foto'}</span><input type="file" id="p-file" accept="image/*" hidden></label>
+        <label class="btn small">${I.camera}<span>Scatta foto</span><input type="file" class="p-file" accept="image/*" capture="environment" hidden></label>
+        <label class="btn small">${I.image}<span>Galleria</span><input type="file" class="p-file" accept="image/*" hidden></label>
         <button type="button" class="btn small ghost danger" id="p-rm" ${m && m.hasPhoto ? '' : 'hidden'}>Togli foto</button>
       </div>
     </div>
@@ -345,7 +371,7 @@ function sheetMap(m) {
       if ($$('.street-row', list).length > 1) del.closest('.street-row').remove();
       else $$('input', del.closest('.street-row')).forEach((i) => { i.value = ''; });
     });
-    $('#p-file', sh).addEventListener('change', async (e) => {
+    $$('.p-file', sh).forEach((input) => input.addEventListener('change', async (e) => {
       const file = e.target.files && e.target.files[0];
       e.target.value = '';
       if (!file) return;
@@ -354,14 +380,12 @@ function sheetMap(m) {
         removePhoto = false;
         prev.src = photo; prev.hidden = false;
         $('#p-rm', sh).hidden = false;
-        $('#p-pick-label', sh).textContent = 'Cambia foto';
       } catch (err) { toast('Impossibile leggere la foto'); }
-    });
+    }));
     $('#p-rm', sh).addEventListener('click', () => {
       photo = null; removePhoto = true;
       prev.hidden = true; prev.removeAttribute('src');
       $('#p-rm', sh).hidden = true;
-      $('#p-pick-label', sh).textContent = 'Scatta o scegli foto';
     });
     on(sh, 'ok', async () => {
       const number = $('#p-num', sh).value.trim();
@@ -498,21 +522,25 @@ function viewBuilding(b) {
     </div>
     ${tab === 'intercom' ? intercomHTML(b) : floorsHTML(b)}
     ${hasA ? `<div class="footer-actions"><button class="btn ghost small" data-act="new-round">${I.refresh} Nuovo giro: togli gli A</button></div>` : ''}`;
+  if (tab === 'intercom') bindIntercomDrag(b);
 }
 
 function brushBar(where) {
-  const list = [['edit', I.edit, where === 'floor' ? 'Sposta' : 'Modifica'], ['A'], ['N'], ['V'], ['clear', I.eraser, 'Pulisci']];
+  const list = where === 'floor'
+    ? [['edit', I.edit, 'Sposta'], ['A'], ['N'], ['V'], ['clear', I.eraser, 'Pulisci']]
+    : [['edit', I.edit, 'Modifica'], ['move', I.move, 'Sposta'], ['A'], ['N'], ['V'], ['clear', I.eraser, 'Pulisci']];
   const bar = list.map(([k, icon, label]) => {
     const isSt = k.length === 1;
     return `<button class="brush ${isSt ? 's-' + k : ''} ${ui.brush === k ? 'on' : ''}" data-act="brush" data-b="${k}" aria-pressed="${ui.brush === k}" title="${isSt ? STATUS[k] : label}">
       ${isSt ? `<b>${k}</b><span>${STATUS_SHORT[k]}</span>` : `${icon}<span>${label}</span>`}</button>`;
   }).join('');
   let hint;
-  if (ui.brush === 'edit') hint = where === 'floor' ? 'Trascina per spostare. Tocca per modificare o aggiungere una nota.' : 'Tocca un pulsante per modificarlo o aggiungere una nota.';
+  if (ui.brush === 'edit') hint = where === 'floor' ? 'Trascina per spostare. Tocca per modificare o aggiungere una nota.' : 'Tocca un pulsante per modificarlo, o il + in uno spazio vuoto per aggiungerne uno.';
+  else if (ui.brush === 'move') hint = ui.moveSel ? 'Ora tocca il posto dove spostarlo.' : 'Trascina un pulsante dove vuoi, oppure toccalo e poi tocca il posto.';
   else if (ui.brush === 'clear') hint = 'Tocca per togliere il segno.';
   else if (ui.brush === 'V') hint = 'Tocca per segnare <b>Visita ulteriore</b> e scrivere una nota.';
   else hint = `Tocca per segnare <b>${STATUS[ui.brush]}</b>. Tieni premuto per la nota.`;
-  return `<div class="brushbar" role="toolbar" aria-label="Strumento">${bar}</div><p class="hint">${hint}</p>`;
+  return `<div class="brushbar" role="toolbar" aria-label="Strumento" style="--n:${list.length}">${bar}</div><p class="hint">${hint}</p>`;
 }
 
 function intercomHTML(b) {
@@ -521,19 +549,99 @@ function intercomHTML(b) {
     return `<div class="empty-state">${I.bell}<p>Riproduci i pulsanti del citofono per segnare velocemente A, N e V anche senza salire.</p>
       <button class="btn primary" data-act="intercom-create">Crea schema citofono</button></div>`;
   }
+  const moving = ui.brush === 'move';
+  const at = new Map(ic.cells.map((c) => [`${c.r}:${c.c}`, c]));
+  let slots = '';
+  for (let r = 0; r < ic.rows; r++) {
+    for (let col = 0; col < ic.cols; col++) {
+      const c = at.get(`${r}:${col}`);
+      if (c) {
+        slots += `<button class="cell ${c.status ? 'marked s-' + c.status : ''} ${moving && ui.moveSel === c.id ? 'sel' : ''}" data-act="cell" ${moving ? '' : 'data-long="cell-edit"'}
+            data-id="${c.id}" data-r="${r}" data-c="${col}" aria-label="Pulsante ${esc(c.label)} ${c.status ? STATUS[c.status] : ''}">
+          <span class="cell-label">${esc(c.label) || '&nbsp;'}</span><span class="cell-st">${c.status}</span>
+          ${c.note ? '<i class="note-dot" title="Con nota"></i>' : ''}</button>`;
+      } else if (ui.brush === 'edit' || moving) {
+        slots += `<button class="slot ${moving && ui.moveSel ? 'target' : ''}" data-act="slot" data-r="${r}" data-c="${col}"
+            aria-label="${moving ? 'Sposta qui' : 'Aggiungi un pulsante qui'}">${moving ? '' : I.plus}</button>`;
+      } else {
+        slots += '<div class="slot" aria-hidden="true"></div>';
+      }
+    }
+  }
   return `${brushBar('intercom')}
-    <div class="intercom" style="--cols:${ic.cols}">
-      ${ic.cells.map((c) => `<button class="cell ${c.status ? 'marked s-' + c.status : ''}" data-act="cell" data-long="cell-edit" data-id="${c.id}"
-          aria-label="Pulsante ${esc(c.label)} ${c.status ? STATUS[c.status] : ''}">
-        <span class="cell-label">${esc(c.label) || '&nbsp;'}</span><span class="cell-st">${c.status}</span>
-        ${c.note ? '<i class="note-dot" title="Con nota"></i>' : ''}</button>`).join('')}
-    </div>
+    <div class="intercom ${moving ? 'moving' : ''}" id="intercom" style="--cols:${ic.cols}">${slots}</div>
     ${countsLine(ic.cells)}
     <div class="row-actions">
-      <div class="stepper">Colonne <button class="btn small" data-act="cols" data-d="-1" aria-label="Meno colonne">−</button><b>${ic.cols}</b><button class="btn small" data-act="cols" data-d="1" aria-label="Più colonne">+</button></div>
+      <div class="steppers">
+        <div class="stepper">Colonne <button class="btn small" data-act="grid" data-k="cols" data-d="-1" aria-label="Meno colonne">−</button><b>${ic.cols}</b><button class="btn small" data-act="grid" data-k="cols" data-d="1" aria-label="Più colonne">+</button></div>
+        <div class="stepper">Righe <button class="btn small" data-act="grid" data-k="rows" data-d="-1" aria-label="Meno righe">−</button><b>${ic.rows}</b><button class="btn small" data-act="grid" data-k="rows" data-d="1" aria-label="Più righe">+</button></div>
+      </div>
       <button class="btn small" data-act="cell-add">${I.plus} Pulsante</button>
       <button class="btn small ghost" data-act="intercom-create">Rifai</button>
     </div>`;
+}
+
+// Move a button to slot (r, c); if another button is there, the two swap places.
+function moveCell(b, cell, r, c) {
+  if (!cell || (cell.r === r && cell.c === c)) return;
+  const other = b.intercom.cells.find((x) => x.r === r && x.c === c);
+  ui.moveSel = null;
+  commit(() => {
+    if (other) { other.r = cell.r; other.c = cell.c; }
+    cell.r = r;
+    cell.c = c;
+    touch(b);
+  }, other ? 'Pulsanti scambiati' : 'Pulsante spostato');
+}
+
+// Drag & drop of intercom buttons in Sposta mode.
+function bindIntercomDrag(b) {
+  const grid = $('#intercom');
+  if (!grid || ui.brush !== 'move') return;
+  let d = null;
+  const targetAt = (x, y) => {
+    d.el.style.pointerEvents = 'none';
+    const t = document.elementFromPoint(x, y);
+    d.el.style.pointerEvents = '';
+    const over = t && t.closest('#intercom .cell, #intercom .slot');
+    return over && over !== d.el ? over : null;
+  };
+  grid.addEventListener('pointerdown', (e) => {
+    const el = e.target.closest('.cell');
+    if (!el || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    d = { el, id: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, over: null };
+    try { el.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  });
+  grid.addEventListener('pointermove', (e) => {
+    if (!d || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.sx;
+    const dy = e.clientY - d.sy;
+    if (!d.moved && Math.hypot(dx, dy) < 8) return;
+    d.moved = true;
+    d.el.classList.add('dragging');
+    d.el.style.transform = `translate(${dx}px, ${dy}px)`;
+    const over = targetAt(e.clientX, e.clientY);
+    if (over !== d.over) {
+      if (d.over) d.over.classList.remove('drop');
+      d.over = over;
+      if (over) over.classList.add('drop');
+    }
+  });
+  const end = (e) => {
+    if (!d || e.pointerId !== d.id) return;
+    const x = d;
+    d = null;
+    if (!x.moved) return; // a plain tap is handled by the click (select, then tap destination)
+    if (e.pointerType === 'mouse') swallowNextClick(); // only a mouse fires a click after a drag
+    x.el.style.transform = '';
+    x.el.classList.remove('dragging');
+    if (x.over) x.over.classList.remove('drop');
+    if (e.type === 'pointercancel' || !x.over) return;
+    const cell = b.intercom.cells.find((c) => c.id === x.el.dataset.id);
+    moveCell(b, cell, int(x.over.dataset.r, 0), int(x.over.dataset.c, 0));
+  };
+  grid.addEventListener('pointerup', end);
+  grid.addEventListener('pointercancel', end);
 }
 
 function floorsHTML(b) {
@@ -567,6 +675,7 @@ const miniCanvas = (items) => `<div class="canvas mini" aria-hidden="true">${ite
 
 function viewFloor(b, f) {
   cur = { b, f };
+  if (ui.brush === 'move') ui.brush = 'edit'; // on the landing, "Sposta" is the edit tool itself
   document.title = `${f.label} · ${b.name}`;
   const fl = sortedFloors(b);
   const idx = fl.indexOf(f);
@@ -629,6 +738,10 @@ function bindCanvas(b, f) {
   cv.addEventListener('pointerup', end);
   cv.addEventListener('pointercancel', end);
 }
+const nextCellLabel = (b) => {
+  const nums = b.intercom.cells.map((c) => parseInt(c.label, 10)).filter(Number.isFinite);
+  return nums.length ? String(Math.max(...nums) + 1) : String(b.intercom.cells.length + 1);
+};
 const doorName = (d) => d.label ? `Porta ${d.label}` : 'Porta';
 const cellName = (c) => c.label ? `Pulsante ${c.label}` : 'Pulsante';
 
@@ -761,7 +874,7 @@ function sheetBuilding(b, mapId = '') {
       if (!name) { nameIn.focus(); return; }
       closeSheet();
       if (isNew) {
-        const nb = { id: uid(), mapId: newMap, name, note, createdAt: now(), updatedAt: now(), intercom: { cols: 2, cells: [] }, floors: [] };
+        const nb = { id: uid(), mapId: newMap, name, note, createdAt: now(), updatedAt: now(), intercom: { cols: 2, rows: 4, cells: [] }, floors: [] };
         commit(() => { db.buildings.push(nb); touch(nb); }, null, { undoable: false, rerender: false });
         location.hash = `#/b/${nb.id}`;
       } else {
@@ -786,7 +899,7 @@ const actions = {
   'edit-map': () => sheetMap(cur.m),
   'photo-view': () => { const img = $('#map-img'); if (img && img.src) openPhotoViewer(img.src); },
   tab: (el) => { ui.tabs[cur.b.id] = el.dataset.tab; saveUi(); render(); },
-  brush: (el) => { ui.brush = el.dataset.b; render(); },
+  brush: (el) => { ui.brush = el.dataset.b; ui.moveSel = null; render(); },
 
   'intercom-create': () => {
     const b = cur.b;
@@ -802,35 +915,80 @@ const actions = {
       ${has ? '<p class="warn">Lo schema attuale e i suoi segni verranno sostituiti (puoi sempre annullare).</p>' : ''}
       <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button><button class="btn primary" data-act="ok">Crea</button></div>`, (sh) => {
       on(sh, 'ok', () => {
-        const n = clamp(int($('#ic-n', sh).value, 8), 1, 200);
-        const c = clamp(int($('#ic-c', sh).value, 2), 1, 6);
+        const c = clamp(int($('#ic-c', sh).value, 2), 1, IC_MAX_COLS);
+        const n = clamp(int($('#ic-n', sh).value, 8), 1, c * IC_MAX_ROWS);
         const num = $('#ic-num', sh).checked;
         const start = int($('#ic-start', sh).value, 1);
         closeSheet();
         commit(() => {
-          b.intercom = { cols: c, cells: Array.from({ length: n }, (_, i) => mark({ label: num ? String(start + i) : '' })) };
+          b.intercom = {
+            cols: c,
+            rows: Math.ceil(n / c),
+            cells: Array.from({ length: n }, (_, i) => mark({ label: num ? String(start + i) : '', r: Math.floor(i / c), c: i % c })),
+          };
           touch(b);
         }, 'Schema del citofono creato');
       });
     });
   },
   cell: (el) => {
-    const c = cur.b.intercom.cells.find((x) => x.id === el.dataset.id);
+    const b = cur.b;
+    const c = b.intercom.cells.find((x) => x.id === el.dataset.id);
     if (!c) return;
+    if (ui.brush === 'move') {
+      const sel = b.intercom.cells.find((x) => x.id === ui.moveSel);
+      if (!sel) { ui.moveSel = c.id; render(); }
+      else if (sel === c) { ui.moveSel = null; render(); }
+      else moveCell(b, sel, c.r, c.c);
+      return;
+    }
     if (ui.brush === 'edit') actions['cell-edit'](el);
-    else applyBrush(cur.b, c, cellName(c));
+    else applyBrush(b, c, cellName(c));
+  },
+  slot: (el) => {
+    const b = cur.b;
+    const r = int(el.dataset.r, 0);
+    const col = int(el.dataset.c, 0);
+    if (ui.brush === 'move') {
+      const sel = b.intercom.cells.find((x) => x.id === ui.moveSel);
+      if (sel) moveCell(b, sel, r, col);
+      else toast('Prima tocca il pulsante da spostare');
+      return;
+    }
+    commit(() => { b.intercom.cells.push(mark({ label: nextCellLabel(b), r, c: col })); touch(b); }, 'Pulsante aggiunto');
   },
   'cell-edit': (el) => {
     const b = cur.b;
     const c = b.intercom.cells.find((x) => x.id === el.dataset.id);
     if (c) sheetMark(b, c, { title: 'Pulsante del citofono', labelHint: 'Etichetta (es. numero interno)', remove: () => { b.intercom.cells = b.intercom.cells.filter((x) => x !== c); } });
   },
-  cols: (el) => { const b = cur.b; commit(() => { b.intercom.cols = clamp(b.intercom.cols + int(el.dataset.d, 0), 1, 6); }, null, { undoable: false }); },
+  // Colonne / Righe: growing adds empty slots; shrinking only removes an empty last column/row.
+  grid: (el) => {
+    const ic = cur.b.intercom;
+    const k = el.dataset.k;
+    const d = int(el.dataset.d, 0);
+    const max = k === 'cols' ? IC_MAX_COLS : IC_MAX_ROWS;
+    const next = clamp(ic[k] + d, 1, max);
+    if (next === ic[k]) return;
+    if (d < 0 && ic.cells.some((c) => (k === 'cols' ? c.c : c.r) >= next)) {
+      toast(k === 'cols' ? "Togli o sposta prima i pulsanti dell'ultima colonna" : "Togli o sposta prima i pulsanti dell'ultima riga");
+      return;
+    }
+    commit(() => { ic[k] = next; }, null, { undoable: false });
+  },
   'cell-add': () => {
     const b = cur.b;
-    const last = b.intercom.cells[b.intercom.cells.length - 1];
-    const n = last ? parseInt(last.label, 10) : 0;
-    commit(() => { b.intercom.cells.push(mark({ label: Number.isFinite(n) ? String(n + 1) : '' })); touch(b); }, 'Pulsante aggiunto');
+    const ic = b.intercom;
+    const taken = new Set(ic.cells.map((c) => `${c.r}:${c.c}`));
+    let k = 0;
+    while (taken.has(`${Math.floor(k / ic.cols)}:${k % ic.cols}`)) k++;
+    const r = Math.floor(k / ic.cols);
+    if (r >= IC_MAX_ROWS) { toast('Lo schema è pieno'); return; }
+    commit(() => {
+      ic.cells.push(mark({ label: nextCellLabel(b), r, c: k % ic.cols }));
+      ic.rows = Math.max(ic.rows, r + 1);
+      touch(b);
+    }, 'Pulsante aggiunto');
   },
 
   'floors-add': () => {
