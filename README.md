@@ -29,4 +29,5 @@ Serve un indirizzo **https** (richiesto per l'installazione e per l'uso offline)
 - oppure **GitHub Pages**.
 
 Apri il link dal telefono e scegli *Installa app* (Android) o *Aggiungi alla schermata Home* (iPhone).
-Quando aggiorni i file, aumenta il numero in `CACHE` dentro `sw.js` così il telefono scarica la nuova versione.
+Quando aggiorni i file, aumenta il numero `VERSION` dentro `sw.js`: è quello che fa scaricare al telefono la nuova versione.
+Senza questo passaggio il telefono continua a usare la copia salvata.
