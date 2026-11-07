@@ -39,6 +39,9 @@ const I = {
   layout: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 9v12"/></svg>',
   bell: '<svg viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2"/><path d="M9 7h6M9 11h6M9 15h6"/></svg>',
   layers: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>',
+  map: '<svg viewBox="0 0 24 24"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>',
+  camera: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>',
+  close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   download: '<svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
   upload: '<svg viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></svg>',
   door: '<svg viewBox="0 0 24 24"><path d="M6 21V4a1 1 0 011-1h10a1 1 0 011 1v17M3 21h18"/><circle cx="14.5" cy="12" r=".8"/></svg>',
@@ -72,9 +75,18 @@ function normMark(c) {
 function normalize(d) {
   if (!d || !Array.isArray(d.buildings)) throw new Error('Formato non valido');
   return {
-    version: 1,
+    version: 2,
+    maps: (Array.isArray(d.maps) ? d.maps : []).map((m) => ({
+      id: String(m.id || uid()),
+      number: String(m.number || ''),
+      streets: (m.streets || []).map((s) => ({ name: String(s.name || ''), civici: String(s.civici || '') })).filter((s) => s.name || s.civici),
+      hasPhoto: !!m.hasPhoto,
+      createdAt: m.createdAt || now(),
+      updatedAt: m.updatedAt || now(),
+    })),
     buildings: d.buildings.map((b) => ({
       id: String(b.id || uid()),
+      mapId: b.mapId ? String(b.mapId) : '',
       name: String(b.name || 'Senza nome'),
       note: String(b.note || ''),
       createdAt: b.createdAt || now(),
@@ -99,7 +111,51 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (raw) return normalize(JSON.parse(raw));
   } catch (e) { console.warn('Dati non leggibili', e); }
-  return { version: 1, buildings: [] };
+  return { version: 2, maps: [], buildings: [] };
+}
+
+// Photos of the piantine live in IndexedDB (too big for localStorage), keyed by map id, as JPEG data URLs.
+const photos = (() => {
+  let dbp;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('smemorapp-photos', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('photos');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }));
+  const run = (mode, fn) => open().then((d) => new Promise((res, rej) => {
+    const t = d.transaction('photos', mode);
+    const q = fn(t.objectStore('photos'));
+    t.oncomplete = () => res(q && q.result);
+    t.onerror = () => rej(t.error);
+  }));
+  return {
+    get: (id) => run('readonly', (s) => s.get(id)).catch(() => null),
+    set: (id, v) => run('readwrite', (s) => s.put(v, id)),
+    del: (id) => run('readwrite', (s) => s.delete(id)).catch(() => {}),
+    keys: () => run('readonly', (s) => s.getAllKeys()).catch(() => []),
+    clear: () => run('readwrite', (s) => s.clear()).catch(() => {}),
+  };
+})();
+// Photos of deleted piantine are only removed at the next start, so "Annulla" can still bring them back.
+function cleanupPhotos() {
+  const keep = new Set(db.maps.filter((m) => m.hasPhoto).map((m) => m.id));
+  photos.keys().then((ks) => ks.forEach((k) => { if (!keep.has(k)) photos.del(k); }));
+}
+
+async function compressImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+    const s = Math.min(1, 1800 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * s);
+    c.height = Math.round(img.naturalHeight * s);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.78);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 let db = load();
 function save() {
@@ -129,8 +185,12 @@ function undo() {
 }
 
 const getB = (id) => db.buildings.find((b) => b.id === id);
+const getM = (id) => id ? db.maps.find((m) => m.id === id) : null;
 const getF = (b, id) => b && b.floors.find((f) => f.id === id);
-const touch = (b) => { b.updatedAt = now(); };
+const touch = (b) => { b.updatedAt = now(); const m = getM(b.mapId); if (m) m.updatedAt = b.updatedAt; };
+const mapTitle = (m) => `Piantina ${m.number || 'senza numero'}`;
+const streetsText = (m) => m.streets.map((s) => s.civici ? `${s.name} ${s.civici}` : s.name).join(' · ');
+const allMarks = (b) => [...b.intercom.cells, ...b.floors.flatMap(doorsOf)];
 const doorsOf = (f) => f.items.filter((i) => i.type === 'door');
 const sortedFloors = (b) => [...b.floors].sort((x, y) => y.num - x.num);
 const countList = (arr) => arr.reduce((c, x) => { if (x.status) c[x.status]++; return c; }, { A: 0, N: 0, V: 0, total: arr.length });
@@ -216,8 +276,153 @@ function render() {
     }
     return viewBuilding(b);
   }
+  if (parts[0] === 'm' && parts[1]) {
+    const m = getM(parts[1]);
+    if (!m) { location.replace('#/'); return; }
+    return viewMap(m);
+  }
   if (parts[0] === 'settings') return viewSettings();
   return viewHome();
+}
+
+// ----- piantina -----
+function viewMap(m) {
+  cur = { b: null, f: null, m };
+  document.title = `${mapTitle(m)} · Smemorapp`;
+  const bs = db.buildings.filter((b) => b.mapId === m.id).sort((a, b) => a.name.localeCompare(b.name, 'it', { numeric: true }));
+  topbar({ title: mapTitle(m), back: '#/', actions: `<button class="icon-btn" data-act="edit-map" aria-label="Modifica piantina">${I.edit}</button>` });
+  $('#view').innerHTML = `
+    ${m.streets.length ? `<ul class="streets">${m.streets.map((s) => `<li><strong>${esc(s.name)}</strong>${s.civici ? `<span>${esc(s.civici)}</span>` : ''}</li>`).join('')}</ul>` : ''}
+    ${m.hasPhoto
+      ? `<button class="map-photo" data-act="photo-view" aria-label="Apri la foto della piantina"><img id="map-img" alt="Foto della piantina"></button>`
+      : `<button class="btn ghost small" data-act="edit-map">${I.camera} Aggiungi foto della piantina</button>`}
+    <h3 class="list-title">Civici annotati</h3>
+    <div class="list">${bs.map(cardB).join('') || '<p class="empty">Nessun civico annotato.</p>'}</div>
+    <div class="bottom-bar"><button class="btn primary big" data-act="new-building" data-map="${m.id}">${I.plus} Nota civico</button></div>`;
+  if (m.hasPhoto) photos.get(m.id).then((src) => { const img = $('#map-img'); if (img && src) img.src = src; });
+}
+
+function sheetMap(m) {
+  const isNew = !m;
+  let photo = null;          // new data URL chosen in this sheet
+  let removePhoto = false;
+  const streetRow = (s = { name: '', civici: '' }) => `
+    <div class="street-row">
+      <input class="s-name" value="${esc(s.name)}" placeholder="Via" maxlength="60" autocomplete="off" aria-label="Via">
+      <input class="s-civ" value="${esc(s.civici)}" placeholder="Civici (es. 1-15, 22)" maxlength="60" autocomplete="off" aria-label="Civici">
+      <button type="button" class="icon-btn s-del" aria-label="Togli via">${I.close}</button>
+    </div>`;
+  openSheet(`
+    <h2>${isNew ? 'Nuova piantina' : 'Modifica piantina'}</h2>
+    <label class="field"><span>N° piantina</span><input id="p-num" value="${esc(m && m.number)}" placeholder="Es. 14" maxlength="20" autocomplete="off"></label>
+    <div class="field"><span>Vie e civici</span>
+      <div id="p-streets">${(m && m.streets.length ? m.streets : [undefined]).map(streetRow).join('')}</div>
+      <button type="button" class="btn small ghost" id="p-add">${I.plus} Aggiungi via</button>
+    </div>
+    <div class="field"><span>Foto della piantina (facoltativa)</span>
+      <div class="photo-pick">
+        <img id="p-prev" alt="" hidden>
+        <label class="btn small">${I.camera}<span id="p-pick-label">${m && m.hasPhoto ? 'Cambia foto' : 'Scatta o scegli foto'}</span><input type="file" id="p-file" accept="image/*" hidden></label>
+        <button type="button" class="btn small ghost danger" id="p-rm" ${m && m.hasPhoto ? '' : 'hidden'}>Togli foto</button>
+      </div>
+    </div>
+    <div class="sheet-actions">
+      ${isNew ? '' : `<button class="btn danger-ghost" data-act="del">${I.trash} Elimina</button>`}
+      <button class="btn" data-act="cancel">Annulla</button>
+      <button class="btn primary" data-act="ok">${isNew ? 'Crea' : 'Salva'}</button>
+    </div>`, (sh) => {
+    const list = $('#p-streets', sh);
+    const prev = $('#p-prev', sh);
+    if (isNew) $('#p-num', sh).focus();
+    if (m && m.hasPhoto) photos.get(m.id).then((src) => { if (src && !photo && !removePhoto) { prev.src = src; prev.hidden = false; } });
+    $('#p-add', sh).addEventListener('click', () => {
+      list.insertAdjacentHTML('beforeend', streetRow());
+      $$('.s-name', list).pop().focus();
+    });
+    list.addEventListener('click', (e) => {
+      const del = e.target.closest('.s-del');
+      if (!del) return;
+      if ($$('.street-row', list).length > 1) del.closest('.street-row').remove();
+      else $$('input', del.closest('.street-row')).forEach((i) => { i.value = ''; });
+    });
+    $('#p-file', sh).addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      try {
+        photo = await compressImage(file);
+        removePhoto = false;
+        prev.src = photo; prev.hidden = false;
+        $('#p-rm', sh).hidden = false;
+        $('#p-pick-label', sh).textContent = 'Cambia foto';
+      } catch (err) { toast('Impossibile leggere la foto'); }
+    });
+    $('#p-rm', sh).addEventListener('click', () => {
+      photo = null; removePhoto = true;
+      prev.hidden = true; prev.removeAttribute('src');
+      $('#p-rm', sh).hidden = true;
+      $('#p-pick-label', sh).textContent = 'Scatta o scegli foto';
+    });
+    on(sh, 'ok', async () => {
+      const number = $('#p-num', sh).value.trim();
+      const streets = $$('.street-row', list)
+        .map((r) => ({ name: $('.s-name', r).value.trim(), civici: $('.s-civ', r).value.trim() }))
+        .filter((s) => s.name || s.civici);
+      if (!number && !streets.length) { $('#p-num', sh).focus(); return; }
+      const target = m || { id: uid(), number: '', streets: [], hasPhoto: false, createdAt: now(), updatedAt: now() };
+      if (photo) {
+        try { await photos.set(target.id, photo); }
+        catch (err) { toast('Spazio insufficiente per salvare la foto'); return; }
+      }
+      closeSheet();
+      commit(() => {
+        target.number = number;
+        target.streets = streets;
+        if (photo) target.hasPhoto = true;
+        if (removePhoto) target.hasPhoto = false;
+        target.updatedAt = now();
+        if (isNew) db.maps.push(target);
+      }, isNew ? null : 'Piantina aggiornata', { undoable: !isNew, rerender: !isNew });
+      if (isNew) location.hash = `#/m/${target.id}`;
+    });
+    on(sh, 'del', () => sheetDeleteMap(m));
+  });
+}
+
+function sheetDeleteMap(m) {
+  const n = db.buildings.filter((b) => b.mapId === m.id).length;
+  const done = (withCivici) => {
+    closeSheet();
+    commit(() => {
+      db.maps = db.maps.filter((x) => x !== m);
+      if (withCivici) db.buildings = db.buildings.filter((b) => b.mapId !== m.id);
+      else db.buildings.forEach((b) => { if (b.mapId === m.id) b.mapId = ''; });
+    }, 'Piantina eliminata', { rerender: false });
+    location.hash = '#/';
+  };
+  if (!n) { if (confirm(`Eliminare ${mapTitle(m)}?`)) done(false); return; }
+  openSheet(`
+    <h2>Eliminare ${esc(mapTitle(m))}?</h2>
+    <p class="muted">Ci sono ${n} civic${n === 1 ? 'o annotato' : 'i annotati'} in questa piantina.</p>
+    <div class="menu-list">
+      <button class="btn" data-act="keep">Elimina solo la piantina e tieni i civici</button>
+      <button class="btn danger" data-act="all">${I.trash} Elimina piantina e civici</button>
+    </div>
+    <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button></div>`, (sh) => {
+    on(sh, 'keep', () => done(false));
+    on(sh, 'all', () => done(true));
+  });
+}
+
+function openPhotoViewer(src) {
+  const v = document.createElement('div');
+  v.className = 'viewer';
+  v.innerHTML = `<button class="icon-btn viewer-close" aria-label="Chiudi">${I.close}</button><div class="viewer-scroll"><img src="${esc(src)}" alt="Foto della piantina"></div><p class="viewer-hint">Tocca la foto per ingrandire</p>`;
+  document.body.appendChild(v);
+  const img = $('img', v);
+  img.addEventListener('click', () => v.classList.toggle('zoom'));
+  $('.viewer-close', v).addEventListener('click', () => v.remove());
+  window.addEventListener('hashchange', () => v.remove(), { once: true });
 }
 
 // ----- home -----
@@ -225,15 +430,14 @@ function viewHome() {
   cur = { b: null, f: null };
   document.title = 'Smemorapp';
   topbar({ title: 'Smemorapp', actions: `<a class="icon-btn" href="#/settings" aria-label="Backup e impostazioni">${I.settings}</a>` });
-  $('#view').innerHTML = db.buildings.length
-    ? `<input class="search" type="search" id="search" placeholder="Cerca palazzo o via…" value="${esc(ui.search)}" autocomplete="off">
-       <div class="list" id="blist"></div>
-       <button class="fab" data-act="new-building">${I.plus}<span>Nuovo palazzo</span></button>`
-    : `<div class="empty-state">${I.bell}
-         <p>Aggiungi un palazzo per creare lo schema del citofono e dei piani, poi segna velocemente chi trovi.</p>
-         <button class="btn primary" data-act="new-building">${I.plus} Nuovo palazzo</button>
-         ${legend()}
-       </div>`;
+  const empty = !db.buildings.length && !db.maps.length;
+  $('#view').innerHTML = `
+    ${empty ? '' : `<input class="search" type="search" id="search" placeholder="Cerca piantina, via o civico…" value="${esc(ui.search)}" autocomplete="off">
+    <div id="blist"></div>`}
+    <div class="bottom-bar">
+      <button class="btn primary big" data-act="new-building">${I.plus} Nota civico</button>
+      <button class="btn primary big" data-act="new-map">${I.plus} Piantina</button>
+    </div>`;
   const s = $('#search');
   if (s) {
     s.addEventListener('input', () => { ui.search = s.value; renderHomeList(); });
@@ -243,12 +447,27 @@ function viewHome() {
 function legend() {
   return `<div class="legend">${Object.entries(STATUS).map(([k, v]) => `<div class="s-${k}"><b>${k}</b>${v}</div>`).join('')}</div>`;
 }
+const byRecent = (a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '');
 function renderHomeList() {
   const q = ui.search.trim().toLowerCase();
-  const list = [...db.buildings]
-    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-    .filter((b) => !q || `${b.name} ${b.note}`.toLowerCase().includes(q));
-  $('#blist').innerHTML = list.map(cardB).join('') || '<p class="empty">Nessun palazzo trovato.</p>';
+  const hit = (txt) => !q || txt.toLowerCase().includes(q);
+  const maps = [...db.maps]
+    .sort((a, b) => a.number.localeCompare(b.number, 'it', { numeric: true }))
+    .filter((m) => hit(`piantina ${m.number} ${streetsText(m)}`) || db.buildings.some((b) => b.mapId === m.id && hit(b.name)));
+  const singles = db.buildings.filter((b) => !getM(b.mapId)).sort(byRecent).filter((b) => hit(`${b.name} ${b.note}`));
+  $('#blist').innerHTML =
+    (maps.length ? `<h3 class="list-title">Piantine</h3><div class="list">${maps.map(cardM).join('')}</div>` : '') +
+    (singles.length ? `<h3 class="list-title">Civici singoli</h3><div class="list">${singles.map(cardB).join('')}</div>` : '') +
+    (!maps.length && !singles.length ? '<p class="empty">Nessun risultato.</p>' : '');
+}
+function cardM(m) {
+  const bs = db.buildings.filter((b) => b.mapId === m.id);
+  return `<a class="card" href="#/m/${m.id}">
+    <div class="card-main"><strong>${I.map} ${esc(mapTitle(m))}</strong>${m.streets.length ? `<span class="muted small">${esc(streetsText(m))}</span>` : ''}</div>
+    <div class="card-meta">
+      <span class="muted small">${bs.length} civic${bs.length === 1 ? 'o' : 'i'}${m.hasPhoto ? ' · con foto' : ''}</span>
+      ${bs.length ? `<span class="meta-group">${pills(countList(bs.flatMap(allMarks)))}</span>` : ''}
+    </div></a>`;
 }
 function cardB(b) {
   const ci = countList(b.intercom.cells);
@@ -268,8 +487,10 @@ function viewBuilding(b) {
   document.title = `${b.name} · Smemorapp`;
   const tab = ui.tabs[b.id] || 'intercom';
   const hasA = b.intercom.cells.some((c) => c.status === 'A') || b.floors.some((f) => f.items.some((i) => i.status === 'A'));
-  topbar({ title: b.name, back: '#/', actions: `<button class="icon-btn" data-act="edit-building" aria-label="Modifica palazzo">${I.edit}</button>` });
+  const m = getM(b.mapId);
+  topbar({ title: b.name, back: m ? `#/m/${m.id}` : '#/', actions: `<button class="icon-btn" data-act="edit-building" aria-label="Modifica civico">${I.edit}</button>` });
   $('#view').innerHTML = `
+    ${m ? `<a class="chip map-chip" href="#/m/${m.id}">${I.map} ${esc(mapTitle(m))}</a>` : ''}
     ${b.note ? `<p class="subtitle">${esc(b.note)}</p>` : ''}
     <div class="tabs" role="tablist">
       <button class="tab ${tab === 'intercom' ? 'on' : ''}" role="tab" aria-selected="${tab === 'intercom'}" data-act="tab" data-tab="intercom">${I.bell} Citofono</button>
@@ -505,44 +726,65 @@ function sheetLandmark(b, f, it) {
   });
 }
 
-function sheetBuilding(b) {
+// b = civico to edit, or null for a new one (mapId = piantina to put it in).
+function sheetBuilding(b, mapId = '') {
   const isNew = !b;
+  const selMap = isNew ? mapId : b.mapId;
+  const m = getM(selMap);
+  const maps = [...db.maps].sort((x, y) => x.number.localeCompare(y.number, 'it', { numeric: true }));
   openSheet(`
-    <h2>${isNew ? 'Nuovo palazzo' : 'Modifica palazzo'}</h2>
-    <label class="field"><span>Indirizzo o nome</span><input id="b-name" value="${esc(b && b.name)}" placeholder="Es. Via Roma 12" maxlength="80" autocomplete="off"></label>
-    <label class="field"><span>Nota (facoltativa)</span><input id="b-note" value="${esc(b && b.note)}" placeholder="Es. Scala B, territorio 14" maxlength="120" autocomplete="off"></label>
+    <h2>${isNew ? 'Nota civico' : 'Modifica civico'}</h2>
+    ${isNew && m && m.streets.length ? `<div class="chips" id="b-chips">${m.streets.filter((s) => s.name).map((s) => `<button type="button" class="chip" data-street="${esc(s.name)}">${esc(s.name)}</button>`).join('')}</div>` : ''}
+    <label class="field"><span>Via e civico</span><input id="b-name" value="${esc(b && b.name)}" placeholder="Es. Via Roma 12" maxlength="80" autocomplete="off"></label>
+    <label class="field"><span>Nota (facoltativa)</span><input id="b-note" value="${esc(b && b.note)}" placeholder="Es. scala B, me l'ha affidato Marco" maxlength="120" autocomplete="off"></label>
+    ${maps.length ? `<label class="field"><span>Piantina</span><select id="b-map"><option value="">Nessuna (civico singolo)</option>${maps.map((x) => `<option value="${x.id}" ${x.id === selMap ? 'selected' : ''}>${esc(mapTitle(x))}</option>`).join('')}</select></label>` : ''}
     <div class="sheet-actions">
       ${isNew ? '' : `<button class="btn danger-ghost" data-act="del">${I.trash} Elimina</button>`}
       <button class="btn" data-act="cancel">Annulla</button>
       <button class="btn primary" data-act="ok">${isNew ? 'Crea' : 'Salva'}</button>
     </div>`, (sh) => {
-    if (isNew) $('#b-name', sh).focus();
+    const nameIn = $('#b-name', sh);
+    if (isNew) nameIn.focus();
+    const chips = $('#b-chips', sh);
+    if (chips) chips.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-street]');
+      if (!c) return;
+      nameIn.value = c.dataset.street + ' ';
+      nameIn.focus();
+      nameIn.setSelectionRange(nameIn.value.length, nameIn.value.length);
+    });
     on(sh, 'ok', () => {
-      const name = $('#b-name', sh).value.trim();
+      const name = nameIn.value.trim();
       const note = $('#b-note', sh).value.trim();
-      if (!name) { $('#b-name', sh).focus(); return; }
+      const sel = $('#b-map', sh);
+      const newMap = sel ? sel.value : selMap;
+      if (!name) { nameIn.focus(); return; }
       closeSheet();
       if (isNew) {
-        const nb = { id: uid(), name, note, createdAt: now(), updatedAt: now(), intercom: { cols: 2, cells: [] }, floors: [] };
-        commit(() => db.buildings.push(nb), null, { undoable: false, rerender: false });
+        const nb = { id: uid(), mapId: newMap, name, note, createdAt: now(), updatedAt: now(), intercom: { cols: 2, cells: [] }, floors: [] };
+        commit(() => { db.buildings.push(nb); touch(nb); }, null, { undoable: false, rerender: false });
         location.hash = `#/b/${nb.id}`;
       } else {
-        commit(() => { b.name = name; b.note = note; touch(b); }, 'Palazzo aggiornato');
+        commit(() => { b.name = name; b.note = note; b.mapId = newMap; touch(b); }, 'Civico aggiornato');
       }
     });
     on(sh, 'del', () => {
       if (!confirm(`Eliminare "${b.name}" con citofono e piani?`)) return;
       closeSheet();
-      commit(() => { db.buildings = db.buildings.filter((x) => x.id !== b.id); }, 'Palazzo eliminato', { rerender: false });
-      location.hash = '#/';
+      const back = getM(b.mapId) ? `#/m/${b.mapId}` : '#/';
+      commit(() => { db.buildings = db.buildings.filter((x) => x.id !== b.id); }, 'Civico eliminato', { rerender: false });
+      location.hash = back;
     });
   });
 }
 
 // ---------- actions (delegated clicks in #view and #topbar) ----------
 const actions = {
-  'new-building': () => sheetBuilding(null),
+  'new-building': (el) => sheetBuilding(null, el.dataset.map || ''),
   'edit-building': () => sheetBuilding(cur.b),
+  'new-map': () => sheetMap(null),
+  'edit-map': () => sheetMap(cur.m),
+  'photo-view': () => { const img = $('#map-img'); if (img && img.src) openPhotoViewer(img.src); },
   tab: (el) => { ui.tabs[cur.b.id] = el.dataset.tab; saveUi(); render(); },
   brush: (el) => { ui.brush = el.dataset.b; render(); },
 
@@ -702,10 +944,12 @@ const actions = {
 
   export: () => exportData(),
   'wipe-all': () => {
-    if (!db.buildings.length) return;
-    if (!confirm('Eliminare TUTTI i palazzi e gli schemi da questo dispositivo?')) return;
+    if (!db.buildings.length && !db.maps.length) return;
+    if (!confirm('Eliminare TUTTE le piantine, i civici e le foto da questo dispositivo?')) return;
     if (!confirm('Sei sicuro? Se non hai un backup non potrai recuperarli.')) return;
-    commit(() => { db.buildings = []; }, 'Tutti i dati eliminati');
+    undoStack.length = 0;
+    photos.clear();
+    commit(() => { db.buildings = []; db.maps = []; }, 'Tutti i dati eliminati', { undoable: false });
   },
 };
 
@@ -750,11 +994,12 @@ function viewSettings() {
   document.title = 'Backup · Smemorapp';
   topbar({ title: 'Backup e informazioni', back: '#/' });
   const nB = db.buildings.length;
+  const nM = db.maps.length;
   $('#view').innerHTML = `
     <section class="panel">
       <h2>I tuoi dati</h2>
-      <p>Hai ${nB} palazz${nB === 1 ? 'o' : 'i'} salvat${nB === 1 ? 'o' : 'i'}. I dati restano <b>solo su questo dispositivo</b>, non vengono inviati a nessuno.
-      Se cancelli i dati del browser o cambi telefono li perdi: fai un backup ogni tanto.</p>
+      <p>Hai ${nM} piantin${nM === 1 ? 'a' : 'e'} e ${nB} civic${nB === 1 ? 'o' : 'i'} salvati. I dati restano <b>solo su questo dispositivo</b>, non vengono inviati a nessuno.
+      Se cancelli i dati del browser o cambi telefono li perdi: fai un backup ogni tanto (include le foto delle piantine).</p>
       <div class="btn-row">
         <button class="btn" data-act="export">${I.download} Esporta backup</button>
         <label class="btn">${I.upload} Importa backup<input type="file" id="imp" accept="application/json,.json" hidden></label>
@@ -773,7 +1018,7 @@ function viewSettings() {
     </section>
     <section class="panel">
       <h2>Zona pericolosa</h2>
-      <p>Elimina tutti i palazzi da questo dispositivo.</p>
+      <p>Elimina tutte le piantine, i civici e le foto da questo dispositivo.</p>
       <button class="btn danger" data-act="wipe-all">${I.trash} Elimina tutti i dati</button>
     </section>`;
   $('#imp').addEventListener('change', async (e) => {
@@ -781,9 +1026,14 @@ function viewSettings() {
     e.target.value = '';
     if (!file) return;
     try {
-      const data = normalize(JSON.parse(await file.text()));
+      const raw = JSON.parse(await file.text());
+      const data = normalize(raw);
       const n = data.buildings.length;
-      if (!confirm(`Il backup contiene ${n} palazz${n === 1 ? 'o' : 'i'}. Sostituire i dati attuali?`)) return;
+      const nm = data.maps.length;
+      if (!confirm(`Il backup contiene ${nm} piantin${nm === 1 ? 'a' : 'e'} e ${n} civic${n === 1 ? 'o' : 'i'}. Sostituire i dati attuali?`)) return;
+      for (const m of raw.maps || []) {
+        if (typeof m.photo === 'string' && m.photo.startsWith('data:image/')) await photos.set(String(m.id), m.photo);
+      }
       commit(() => { db = data; }, 'Backup importato');
     } catch (err) {
       toast('File di backup non valido');
@@ -791,8 +1041,10 @@ function viewSettings() {
   });
 }
 
-function exportData() {
-  const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
+async function exportData() {
+  const out = { ...db, maps: [] };
+  for (const m of db.maps) out.maps.push(m.hasPhoto ? { ...m, photo: await photos.get(m.id) } : m);
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `smemorapp-backup-${new Date().toISOString().slice(0, 10)}.json`;
@@ -847,6 +1099,7 @@ window.addEventListener('hashchange', () => { closeSheet(); render(); window.scr
 window.addEventListener('storage', (e) => { if (e.key === KEY) { db = load(); render(); } });
 
 render();
+cleanupPhotos();
 
 // Offline support. Skipped on localhost so edits during development show up immediately.
 if ('serviceWorker' in navigator && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
