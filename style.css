@@ -176,7 +176,9 @@ h2 { font-size: 19px; margin: 6px 0 4px; }
 .chev { color: var(--muted); }
 
 /* floor editor */
-.floor-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.floor-nav { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; }
+.floor-nav .icon-only { width: 44px; padding: 0; }
+.floor-nav .add-floor { border-style: dashed; border-width: 1.5px; }
 .floor-nav .btn { justify-content: flex-start; }
 .floor-nav .btn:last-child { justify-content: flex-end; }
 .floor-nav .btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
