@@ -1,6 +1,6 @@
 // Service worker: lets the app open offline (e.g. inside buildings with poor signal).
 // Strategy: serve from cache immediately, refresh the cache in the background.
-const CACHE = 'smemorapp-v1';
+const CACHE = 'smemorapp-v2';
 const ASSETS = [
   './',
   './index.html',
