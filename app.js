@@ -788,18 +788,59 @@ function applyBrush(b, obj, name, viaPointer) {
   if (st === 'V') openNote();
 }
 
+// ---------- quick notes ----------
+const QUICK_NOTES = [
+  ['Persona', ['Uomo', 'Donna', 'Ragazzo', 'Ragazza', 'Anziano/a']],
+  ['Situazione', ['Era impegnato/a', 'Era interessato/a a:', 'Era ammalato/a', 'Credeva in', 'Religioso', 'Ateo']],
+  ['Conversazione', ['Lasciato un:', 'Parlato di', 'Domanda:', 'Letto:']],
+  ['Pubblicazioni', ['Invito', 'Volantino', 'Opuscolo', 'Libro', 'Rivista']],
+  ['Ritornare', ['Ritornare di:', 'Mattina', 'Pomeriggio', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']],
+];
+const WHEN_WORDS = ['mattina', 'pomeriggio', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato', 'domenica'];
+const isOpenEnded = (s) => /:$/.test(s) || /\s(in|di)$/i.test(s); // waits for more text after it
+
+// "Uomo" + "Era impegnato/a" → "Uomo, era impegnato/a"; "…di: sabato" + "Mattina" → "…di: sabato mattina"
+function addQuickNote(text, chip) {
+  const t = text.replace(/\s+$/, '');
+  if (!t) return chip;
+  const piece = chip.charAt(0).toLowerCase() + chip.slice(1);
+  const lastWord = (t.split(/[\s,]+/).pop() || '').toLowerCase();
+  const sameWhen = WHEN_WORDS.includes(lastWord) && WHEN_WORDS.includes(piece);
+  const sep = isOpenEnded(t) || sameWhen || /[.,;]$/.test(t) ? ' ' : ', ';
+  return t + sep + piece;
+}
+function quickNotesHTML() {
+  return `<div class="quick-notes">${QUICK_NOTES.map(([group, chips]) => `
+    <div class="qn-group"><span class="qn-title">${esc(group)}</span>
+      <div class="chips">${chips.map((c) => `<button type="button" class="chip" data-qn="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+    </div>`).join('')}</div>`;
+}
+function bindQuickNotes(sh, ta) {
+  sh.addEventListener('click', (e) => {
+    const c = e.target.closest('[data-qn]');
+    if (!c) return;
+    let v = addQuickNote(ta.value, c.dataset.qn);
+    if (isOpenEnded(v)) v += ' ';
+    if (v.length > ta.maxLength) { toast('Nota troppo lunga'); return; }
+    ta.value = v;
+    ta.scrollTop = ta.scrollHeight;
+    c.classList.add('flash');
+    setTimeout(() => c.classList.remove('flash'), 250);
+  });
+}
+
 function sheetNote(b, obj, name) {
   openSheet(`
     <h2><span class="pill s-V">V</span> ${esc(name)}: visita ulteriore</h2>
-    <label class="field"><span>Nota (facoltativa)</span><textarea id="n-note" rows="3" maxlength="500" placeholder="Es. argomento trattato, quando ritornare… Evita nomi e dati personali.">${esc(obj.note)}</textarea></label>
-    <div class="sheet-actions">
+    <label class="field"><span>Nota (facoltativa): tocca i pulsanti o scrivi</span><textarea id="n-note" rows="3" maxlength="500" placeholder="Es. argomento trattato, quando ritornare… Evita nomi e dati personali.">${esc(obj.note)}</textarea></label>
+    ${quickNotesHTML()}
+    <div class="sheet-actions sticky">
       <button class="btn danger-ghost" data-act="unmark">Togli V</button>
       <button class="btn" data-act="cancel">Salta</button>
       <button class="btn primary" data-act="ok">Salva nota</button>
     </div>`, (sh) => {
     const ta = $('#n-note', sh);
-    ta.focus();
-    ta.setSelectionRange(ta.value.length, ta.value.length);
+    bindQuickNotes(sh, ta);
     on(sh, 'ok', () => {
       const note = ta.value.trim();
       closeSheet();
@@ -827,17 +868,20 @@ function sheetMark(b, obj, { title, labelHint, remove }) {
       <div class="seg" id="m-seg">${['', 'A', 'N', 'V'].map((k) => `<button type="button" class="seg-btn ${k ? 's-' + k : ''} ${st === k ? 'on' : ''}" data-st="${k}">${k ? `<b>${k}</b>${STATUS[k]}` : 'Nessun segno'}</button>`).join('')}</div>
     </div>
     <label class="field"><span>Nota</span><textarea id="m-note" rows="3" maxlength="500" placeholder="Es. argomento trattato, quando ritornare… Evita nomi e dati personali.">${esc(obj.note)}</textarea></label>
+    <details class="qn-box" id="m-qn" ${st === 'V' ? 'open' : ''}><summary>Note veloci</summary>${quickNotesHTML()}</details>
     ${obj.date ? `<p class="muted small">Ultimo aggiornamento: ${fmtDate(obj.date)}</p>` : ''}
-    <div class="sheet-actions">
+    <div class="sheet-actions sticky">
       <button class="btn danger-ghost" data-act="del">${I.trash} Elimina</button>
       <button class="btn" data-act="cancel">Annulla</button>
       <button class="btn primary" data-act="ok">Salva</button>
     </div>`, (sh) => {
+    bindQuickNotes(sh, $('#m-note', sh));
     $('#m-seg', sh).addEventListener('click', (e) => {
       const t = e.target.closest('[data-st]');
       if (!t) return;
       st = t.dataset.st;
       $$('.seg-btn', sh).forEach((x) => x.classList.toggle('on', x === t));
+      if (st === 'V') $('#m-qn', sh).open = true;
     });
     on(sh, 'ok', () => {
       const label = $('#m-label', sh).value.trim();
