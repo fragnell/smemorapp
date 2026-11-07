@@ -16,6 +16,12 @@ Web app (PWA) per il ministero di casa in casa: schemi di **citofoni** e **piane
    Con le frecce in alto passi al piano sopra o sotto.
 4. **Nuovo giro**: toglie tutti gli A del palazzo e lascia N e V.
 5. Ogni modifica si può annullare dal messaggio in basso.
+6. **Note**: in fondo al civico trovi tutte le note in ordine di pulsante (o di piano e porta); toccane una per leggerla e modificarla.
+7. **Condividi** (icona in alto nel civico o nella piantina):
+   - *Immagini* con schema, A/N/V e note, per chi non usa l'app;
+   - *Testo* con lo stesso contenuto;
+   - *File per l'app*: chi usa Smemorapp lo apre con l'icona "Importa note ricevute" nella prima pagina.
+     Si aggiunge ai suoi dati (se aveva già quel civico o quella piantina, vengono aggiornati).
 
 ## Provarla sul computer
 ```bash
