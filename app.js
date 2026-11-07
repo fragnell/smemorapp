@@ -536,7 +536,7 @@ function brushBar(where) {
   }).join('');
   let hint;
   if (ui.brush === 'edit') hint = where === 'floor' ? 'Trascina per spostare. Tocca per modificare o aggiungere una nota.' : 'Tocca un pulsante per modificarlo, o il + in uno spazio vuoto per aggiungerne uno.';
-  else if (ui.brush === 'move') hint = ui.moveSel ? 'Ora tocca il posto dove spostarlo.' : 'Trascina un pulsante dove vuoi, oppure toccalo e poi tocca il posto.';
+  else if (ui.brush === 'move') hint = ui.moveSel ? 'Ora tocca il posto dove spostarlo.' : 'Trascina un pulsante dove vuoi, oppure toccalo e poi tocca il posto. Tieni premuto per eliminarlo.';
   else if (ui.brush === 'clear') hint = 'Tocca per togliere il segno.';
   else if (ui.brush === 'V') hint = 'Tocca per segnare <b>Visita ulteriore</b> e scrivere una nota.';
   else hint = `Tocca per segnare <b>${STATUS[ui.brush]}</b>. Tieni premuto per la nota.`;
@@ -594,7 +594,26 @@ function moveCell(b, cell, r, c) {
   }, other ? 'Pulsanti scambiati' : 'Pulsante spostato');
 }
 
-// Drag & drop of intercom buttons in Sposta mode.
+// Long-press menu in Sposta mode.
+function sheetCellOptions(b, c) {
+  openSheet(`
+    <h2>${esc(cellName(c))}</h2>
+    <div class="menu-list">
+      <button class="btn" data-act="co-edit">${I.edit} Modifica etichetta e nota</button>
+      <button class="btn danger" data-act="co-del">${I.trash} Elimina pulsante</button>
+    </div>
+    <p class="muted small">Eliminando il pulsante il suo posto resta vuoto; gli altri non si spostano.</p>
+    <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button></div>`, (sh) => {
+    on(sh, 'co-edit', () => actions['cell-edit']({ dataset: { id: c.id } }));
+    on(sh, 'co-del', () => {
+      closeSheet();
+      if (ui.moveSel === c.id) ui.moveSel = null;
+      commit(() => { b.intercom.cells = b.intercom.cells.filter((x) => x !== c); touch(b); }, `${cellName(c)} eliminato`);
+    });
+  });
+}
+
+// Drag & drop of intercom buttons in Sposta mode; holding still on a button opens its menu instead.
 function bindIntercomDrag(b) {
   const grid = $('#intercom');
   if (!grid || ui.brush !== 'move') return;
@@ -609,14 +628,24 @@ function bindIntercomDrag(b) {
   grid.addEventListener('pointerdown', (e) => {
     const el = e.target.closest('.cell');
     if (!el || (e.pointerType === 'mouse' && e.button !== 0)) return;
-    d = { el, id: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, over: null };
+    const press = { el, id: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, over: null, long: false };
+    d = press;
     try { el.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    press.timer = setTimeout(() => {
+      if (d !== press || press.moved) return;
+      const cell = b.intercom.cells.find((c) => c.id === el.dataset.id);
+      if (!cell) return;
+      press.long = true;
+      vibrate();
+      sheetCellOptions(b, cell);
+    }, 480);
   });
   grid.addEventListener('pointermove', (e) => {
-    if (!d || e.pointerId !== d.id) return;
+    if (!d || e.pointerId !== d.id || d.long) return;
     const dx = e.clientX - d.sx;
     const dy = e.clientY - d.sy;
     if (!d.moved && Math.hypot(dx, dy) < 8) return;
+    clearTimeout(d.timer);
     d.moved = true;
     d.el.classList.add('dragging');
     d.el.style.transform = `translate(${dx}px, ${dy}px)`;
@@ -631,6 +660,8 @@ function bindIntercomDrag(b) {
     if (!d || e.pointerId !== d.id) return;
     const x = d;
     d = null;
+    clearTimeout(x.timer);
+    if (x.long) { swallowNextClick(); return; } // menu is open: the click that follows must not hit it
     if (!x.moved) return; // a plain tap is handled by the click (select, then tap destination)
     if (e.pointerType === 'mouse') swallowNextClick(); // only a mouse fires a click after a drag
     x.el.style.transform = '';
@@ -1251,7 +1282,7 @@ document.addEventListener('pointermove', (e) => {
   if (lp.el && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > 10) { clearTimeout(lp.timer); lp.el = null; }
 });
 ['pointerup', 'pointercancel'].forEach((ev) => document.addEventListener(ev, () => { clearTimeout(lp.timer); lp.el = null; }));
-document.addEventListener('contextmenu', (e) => { if (e.target.closest('[data-long], .canvas')) e.preventDefault(); });
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('[data-long], .canvas, #intercom')) e.preventDefault(); });
 
 window.addEventListener('hashchange', () => { closeSheet(); render(); window.scrollTo(0, 0); });
 window.addEventListener('storage', (e) => { if (e.key === KEY) { db = load(); render(); } });
