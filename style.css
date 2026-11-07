@@ -309,6 +309,21 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
 .seg-btn b { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--cb); color: var(--c); font-size: 16px; }
 .seg-btn.on { border-color: var(--c, var(--primary)); background: var(--cb, var(--surface-2)); font-weight: 700; }
 .sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.sheet-actions.sticky {
+  position: sticky; bottom: calc(-16px - env(safe-area-inset-bottom)); z-index: 1;
+  margin: 14px -16px calc(-16px - env(safe-area-inset-bottom));
+  padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+.quick-notes { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 6px; }
+.qn-title { display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 5px; }
+.quick-notes .chips { margin: 0; }
+.quick-notes .chip { padding: 8px 12px; background: var(--surface); }
+.quick-notes .chip:active, .quick-notes .chip.flash { background: var(--V-bg); border-color: var(--V); color: var(--V); }
+.qn-box { margin: 4px 0 8px; border: 1px solid var(--border); border-radius: 10px; padding: 0 12px; }
+.qn-box summary { padding: 10px 0; font-weight: 600; font-size: 14px; cursor: pointer; color: var(--muted); }
+.qn-box[open] summary { margin-bottom: 4px; }
+.qn-box[open] { padding-bottom: 12px; }
 .warn { padding: 10px 12px; border-radius: 10px; background: var(--A-bg); color: var(--A); font-size: 14px; }
 .menu-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .menu-list .btn { justify-content: flex-start; }
