@@ -44,6 +44,9 @@ const I = {
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   image: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
   move: '<svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg>',
+  share: '<svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M8.2 10.8l7.6-4.4M8.2 13.2l7.6 4.4"/></svg>',
+  inbox: '<svg viewBox="0 0 24 24"><path d="M12 3v11M8 10l4 4 4-4"/><path d="M4 14v5a1 1 0 001 1h14a1 1 0 001-1v-5"/></svg>',
+  text: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 11h16M4 16h10"/></svg>',
   download: '<svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
   upload: '<svg viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></svg>',
   door: '<svg viewBox="0 0 24 24"><path d="M6 21V4a1 1 0 011-1h10a1 1 0 011 1v17M3 21h18"/><circle cx="14.5" cy="12" r=".8"/></svg>',
@@ -315,7 +318,11 @@ function viewMap(m) {
   cur = { b: null, f: null, m };
   document.title = `${mapTitle(m)} · Smemorapp`;
   const bs = db.buildings.filter((b) => b.mapId === m.id).sort((a, b) => a.name.localeCompare(b.name, 'it', { numeric: true }));
-  topbar({ title: mapTitle(m), back: '#/', actions: `<button class="icon-btn" data-act="edit-map" aria-label="Modifica piantina">${I.edit}</button>` });
+  topbar({
+    title: mapTitle(m),
+    back: '#/',
+    actions: `<button class="icon-btn" data-act="share" aria-label="Condividi piantina">${I.share}</button><button class="icon-btn" data-act="edit-map" aria-label="Modifica piantina">${I.edit}</button>`,
+  });
   $('#view').innerHTML = `
     ${m.streets.length ? `<ul class="streets">${m.streets.map((s) => `<li><strong>${esc(s.name)}</strong>${s.civici ? `<span>${esc(s.civici)}</span>` : ''}</li>`).join('')}</ul>` : ''}
     ${m.hasPhoto
@@ -453,7 +460,12 @@ function openPhotoViewer(src) {
 function viewHome() {
   cur = { b: null, f: null };
   document.title = 'Smemorapp';
-  topbar({ title: 'Smemorapp', actions: `<a class="icon-btn" href="#/settings" aria-label="Backup e impostazioni">${I.settings}</a>` });
+  topbar({
+    title: 'Smemorapp',
+    actions: `<label class="icon-btn" aria-label="Importa note ricevute" title="Importa note ricevute">${I.inbox}<input type="file" id="home-imp" accept=".txt,.json,text/plain,application/json" hidden></label>
+      <a class="icon-btn" href="#/settings" aria-label="Backup e impostazioni">${I.settings}</a>`,
+  });
+  $('#home-imp').addEventListener('change', onImportInput);
   const empty = !db.buildings.length && !db.maps.length;
   $('#view').innerHTML = `
     ${empty ? '' : `<input class="search" type="search" id="search" placeholder="Cerca piantina, via o civico…" value="${esc(ui.search)}" autocomplete="off">
@@ -512,7 +524,11 @@ function viewBuilding(b) {
   const tab = ui.tabs[b.id] || 'intercom';
   const hasA = b.intercom.cells.some((c) => c.status === 'A') || b.floors.some((f) => f.items.some((i) => i.status === 'A'));
   const m = getM(b.mapId);
-  topbar({ title: b.name, back: m ? `#/m/${m.id}` : '#/', actions: `<button class="icon-btn" data-act="edit-building" aria-label="Modifica civico">${I.edit}</button>` });
+  topbar({
+    title: b.name,
+    back: m ? `#/m/${m.id}` : '#/',
+    actions: `<button class="icon-btn" data-act="share" aria-label="Condividi civico">${I.share}</button><button class="icon-btn" data-act="edit-building" aria-label="Modifica civico">${I.edit}</button>`,
+  });
   $('#view').innerHTML = `
     ${m ? `<a class="chip map-chip" href="#/m/${m.id}">${I.map} ${esc(mapTitle(m))}</a>` : ''}
     ${b.note ? `<p class="subtitle">${esc(b.note)}</p>` : ''}
@@ -578,7 +594,8 @@ function intercomHTML(b) {
       </div>
       <button class="btn small" data-act="cell-add">${I.plus} Pulsante</button>
       <button class="btn small ghost" data-act="intercom-create">Rifai</button>
-    </div>`;
+    </div>
+    ${notesHTML(intercomNotes(b))}`;
 }
 
 // Move a button to slot (r, c); if another button is there, the two swap places.
@@ -690,7 +707,8 @@ function floorsHTML(b) {
         <span class="chev">${I.chev}</span>
       </a>`).join('')}</div>
     ${countsLine(fl.flatMap(doorsOf))}
-    <div class="row-actions"><button class="btn small" data-act="floors-add">${I.plus} Aggiungi piani</button></div>`;
+    <div class="row-actions"><button class="btn small" data-act="floors-add">${I.plus} Aggiungi piani</button></div>
+    ${notesHTML(floorNotes(b))}`;
 }
 
 // ----- floor editor -----
@@ -829,14 +847,58 @@ function bindQuickNotes(sh, ta) {
   });
 }
 
-function sheetNote(b, obj, name) {
+// ---------- notes list (civico page) ----------
+const natCmp = (a, b) => String(a).localeCompare(String(b), 'it', { numeric: true });
+// Worth listing: anything with a note, plus every V (a return visit, even without a note).
+const hasNoteOrV = (x) => !!x.note || x.status === 'V';
+const labelCmp = (x, y) => (x.label && y.label ? natCmp(x.label, y.label) : x.label ? -1 : y.label ? 1 : 0);
+const cellCmp = (x, y) => labelCmp(x, y) || x.r - y.r || x.c - y.c;
+const doorCmp = (x, y) => labelCmp(x, y) || x.y - y.y || x.x - y.x;
+const fmtShort = (iso) => new Date(iso).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' });
+
+function intercomNotes(b) {
+  return b.intercom.cells.filter(hasNoteOrV).sort(cellCmp).map((c) => ({ obj: c, name: cellName(c) }));
+}
+function floorNotes(b) {
+  return [...b.floors].sort((x, y) => x.num - y.num).flatMap((f) => doorsOf(f).filter(hasNoteOrV).sort(doorCmp)
+    .map((d) => ({ obj: d, name: `${f.label} · ${doorName(d)}` })));
+}
+function notesHTML(list) {
+  return `<section class="notes-section">
+    <div class="notes-head"><h3 class="list-title">Note${list.length ? ` (${list.length})` : ''}</h3>
+      <button class="btn small" data-act="share">${I.share} Condividi</button></div>
+    ${list.length ? `<div class="note-list">${list.map((n) => `
+      <button class="note-row" data-act="note-open" data-id="${n.obj.id}">
+        <span class="note-badge ${n.obj.status ? 's-' + n.obj.status : ''}">${n.obj.status || '–'}</span>
+        <span class="note-main"><strong>${esc(n.name)}</strong><span class="note-text ${n.obj.note ? '' : 'muted'}">${esc(n.obj.note || 'Nessuna nota')}</span></span>
+        ${n.obj.date ? `<span class="note-date">${esc(fmtShort(n.obj.date))}</span>` : ''}
+      </button>`).join('')}</div>`
+      : '<p class="muted small">Nessuna nota ancora. Quando scrivi una nota o segni una V, la trovi qui in ordine.</p>'}
+  </section>`;
+}
+function sheetNoteView(b, obj, name) {
   openSheet(`
-    <h2><span class="pill s-V">V</span> ${esc(name)}: visita ulteriore</h2>
+    <h2>${obj.status ? `<span class="pill s-${obj.status}">${obj.status}</span> ` : ''}${esc(name)}</h2>
+    <p class="muted small">${obj.status ? STATUS[obj.status] : 'Nessun segno'}${obj.date ? ` · ${fmtDate(obj.date)}` : ''}</p>
+    <div class="note-full ${obj.note ? '' : 'muted'}">${esc(obj.note || 'Nessuna nota')}</div>
+    <div class="sheet-actions">
+      <button class="btn" data-act="cancel">Chiudi</button>
+      <button class="btn primary" data-act="ok">${I.edit} Modifica</button>
+    </div>`, (sh) => {
+    on(sh, 'ok', () => sheetNote(b, obj, name, { fromList: true }));
+  });
+}
+
+// Note editor with quick-note buttons: opens right after marking V, or from the notes list.
+function sheetNote(b, obj, name, { fromList = false } = {}) {
+  const st = obj.status;
+  openSheet(`
+    <h2>${st ? `<span class="pill s-${st}">${st}</span> ` : ''}${esc(name)}${st === 'V' ? ': visita ulteriore' : ''}</h2>
     <label class="field"><span>Nota (facoltativa): tocca i pulsanti o scrivi</span><textarea id="n-note" rows="3" maxlength="500" placeholder="Es. argomento trattato, quando ritornare… Evita nomi e dati personali.">${esc(obj.note)}</textarea></label>
     ${quickNotesHTML()}
     <div class="sheet-actions sticky">
-      <button class="btn danger-ghost" data-act="unmark">Togli V</button>
-      <button class="btn" data-act="cancel">Salta</button>
+      ${st === 'V' ? '<button class="btn danger-ghost" data-act="unmark">Togli V</button>' : ''}
+      <button class="btn" data-act="cancel">${fromList ? 'Annulla' : 'Salta'}</button>
       <button class="btn primary" data-act="ok">Salva nota</button>
     </div>`, (sh) => {
     const ta = $('#n-note', sh);
@@ -973,6 +1035,12 @@ const actions = {
   'new-map': () => sheetMap(null),
   'edit-map': () => sheetMap(cur.m),
   'photo-view': () => { const img = $('#map-img'); if (img && img.src) openPhotoViewer(img.src); },
+  'note-open': (el) => {
+    const b = cur.b;
+    const n = [...intercomNotes(b), ...floorNotes(b)].find((x) => x.obj.id === el.dataset.id);
+    if (n) sheetNoteView(b, n.obj, n.name);
+  },
+  share: () => sheetShare(cur.m ? { m: cur.m } : { b: cur.b }),
   tab: (el) => { ui.tabs[cur.b.id] = el.dataset.tab; saveUi(); render(); },
   brush: (el) => { ui.brush = el.dataset.b; ui.moveSel = null; render(); },
 
@@ -1221,6 +1289,546 @@ function sheetTemplate(b, f) {
   });
 }
 
+// ---------- summaries shared by text and images ----------
+const STATUS_PLURAL = { A: 'Assenti', N: 'Non interessati', V: 'Visite ulteriori' };
+const mapBuildings = (m) => db.buildings.filter((b) => b.mapId === m.id).sort((x, y) => natCmp(x.name, y.name));
+const cellRef = (c) => c.label || `riga ${c.r + 1} col. ${c.c + 1}`;
+// Which buttons / doors carry each mark, e.g. { A: '1, 4, 7', N: '2' }
+function intercomRefs(b) {
+  const cells = [...b.intercom.cells].sort((x, y) => x.r - y.r || x.c - y.c);
+  const out = {};
+  for (const k of ['A', 'N', 'V']) { const l = cells.filter((c) => c.status === k).map(cellRef); if (l.length) out[k] = l.join(', '); }
+  return out;
+}
+function floorRefs(b) {
+  const fl = [...b.floors].sort((x, y) => x.num - y.num);
+  const out = {};
+  for (const k of ['A', 'N', 'V']) {
+    const parts = fl.map((f) => {
+      const ds = doorsOf(f).filter((d) => d.status === k).sort(doorCmp);
+      if (!ds.length) return null;
+      const named = ds.filter((d) => d.label).map((d) => d.label);
+      const unnamed = ds.length - named.length;
+      return `${f.label}: ${[...named, ...(unnamed ? [unnamed === 1 ? '1 porta' : `${unnamed} porte`] : [])].join(', ')}`;
+    }).filter(Boolean);
+    if (parts.length) out[k] = parts.join(' · ');
+  }
+  return out;
+}
+
+function civicoText(b) {
+  const L = [`📍 ${b.name}`];
+  const m = getM(b.mapId);
+  if (m) L.push(mapTitle(m));
+  if (b.note) L.push(b.note);
+  const section = (title, items, refs, notes) => {
+    const c = countList(items);
+    L.push('', `${title} (A ${c.A} · N ${c.N} · V ${c.V})`);
+    for (const k of ['A', 'N', 'V']) if (refs[k]) L.push(`${k} ${STATUS_PLURAL[k]}: ${refs[k]}`);
+    if (notes.length) L.push('Note:');
+    notes.forEach((n) => L.push(`• ${n.name}${n.obj.status ? ` (${n.obj.status})` : ''}: ${n.obj.note || 'nessuna nota'}`));
+  };
+  if (b.intercom.cells.length) section('CITOFONO', b.intercom.cells, intercomRefs(b), intercomNotes(b));
+  if (b.floors.length) section('PIANI', b.floors.flatMap(doorsOf), floorRefs(b), floorNotes(b));
+  if (!b.intercom.cells.length && !b.floors.length) L.push('', 'Nessuno schema ancora.');
+  L.push('', `Aggiornato il ${fmtDate(b.updatedAt)}`);
+  return L.join('\n');
+}
+function mapText(m) {
+  const L = [`🗺️ ${mapTitle(m)}`];
+  m.streets.forEach((s) => L.push(`${s.name}${s.civici ? ': ' + s.civici : ''}`));
+  const bs = mapBuildings(m);
+  bs.forEach((b) => L.push('', '— — — — —', civicoText(b)));
+  if (!bs.length) L.push('', 'Nessun civico annotato.');
+  return L.join('\n');
+}
+
+// ---------- images for sharing (drawn on a canvas, light colours, 1080 px wide) ----------
+const IMG = { W: 1080, PAD: 48, MAX_H: 2400 };
+const PAL = {
+  bg: '#ffffff', text: '#1d232b', muted: '#5f6b7a', border: '#d6dae1', soft: '#f4f5f7', primary: '#2f5d8a',
+  A: ['#b45309', '#fef3c7'], N: ['#c81e1e', '#fee2e2'], V: ['#15803d', '#dcfce7'],
+};
+const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+const font = (size, weight = 400) => `${weight} ${size}px ${FONT}`;
+const measureCtx = document.createElement('canvas').getContext('2d');
+
+function rrect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+}
+function fitText(ctx, text, maxW) {
+  text = String(text);
+  if (ctx.measureText(text).width <= maxW) return text;
+  while (text.length > 1 && ctx.measureText(text + '…').width > maxW) text = text.slice(0, -1);
+  return text + '…';
+}
+function wrap(ctx, text, maxW) {
+  const out = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      const test = line ? `${line} ${word}` : word;
+      if (ctx.measureText(test).width <= maxW) { line = test; continue; }
+      if (line) out.push(line);
+      let w = word;
+      while (ctx.measureText(w).width > maxW && w.length > 1) { // a word longer than the line: hard-break it
+        let k = w.length - 1;
+        while (k > 1 && ctx.measureText(w.slice(0, k)).width > maxW) k--;
+        out.push(w.slice(0, k));
+        w = w.slice(k);
+      }
+      line = w;
+    }
+    out.push(line);
+  }
+  return out;
+}
+function drawBadge(ctx, st, x, y, size) {
+  const p = st ? PAL[st] : null;
+  rrect(ctx, x, y, size, size, size * 0.22);
+  ctx.fillStyle = p ? p[1] : PAL.soft;
+  ctx.fill();
+  ctx.strokeStyle = p ? p[0] : PAL.border;
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  ctx.fillStyle = p ? p[0] : PAL.muted;
+  ctx.font = font(Math.round(size * 0.58), 800);
+  ctx.textAlign = 'center';
+  ctx.fillText(st || '–', x + size / 2, y + size * 0.72);
+  ctx.textAlign = 'left';
+}
+function drawPills(ctx, c, yTop) {
+  let x = IMG.W - IMG.PAD;
+  ctx.font = font(26, 700);
+  for (const k of ['V', 'N', 'A']) {
+    const t = `${k} ${c[k]}`;
+    const w = ctx.measureText(t).width + 28;
+    x -= w;
+    rrect(ctx, x, yTop, w, 42, 21);
+    ctx.fillStyle = PAL[k][1];
+    ctx.fill();
+    ctx.fillStyle = PAL[k][0];
+    ctx.fillText(t, x + 14, yTop + 30);
+    x -= 10;
+  }
+}
+
+// A page is a stack of blocks: { h, draw(ctx, y), keep } (keep = stay on the same page as the next block).
+function bSection(title, counts, size = 36) {
+  return { h: 84, keep: true, draw(ctx, y) {
+    ctx.fillStyle = PAL.text;
+    ctx.font = font(size, 800);
+    ctx.fillText(fitText(ctx, title, IMG.W - 2 * IMG.PAD - (counts ? 330 : 0)), IMG.PAD, y + 54);
+    if (counts) drawPills(ctx, counts, y + 22);
+    ctx.strokeStyle = PAL.border;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(IMG.PAD, y + 76); ctx.lineTo(IMG.W - IMG.PAD, y + 76); ctx.stroke();
+  } };
+}
+function bSub(title) {
+  return { h: 58, keep: true, draw(ctx, y) {
+    ctx.fillStyle = PAL.muted;
+    ctx.font = font(24, 700);
+    ctx.fillText(title.toUpperCase(), IMG.PAD, y + 42);
+  } };
+}
+function bText(text, size = 28, color = PAL.text, weight = 400) {
+  measureCtx.font = font(size, weight);
+  const lines = wrap(measureCtx, text, IMG.W - 2 * IMG.PAD);
+  const lh = Math.round(size * 1.35);
+  return { h: lines.length * lh + 14, draw(ctx, y) {
+    ctx.fillStyle = color;
+    ctx.font = font(size, weight);
+    lines.forEach((l, i) => ctx.fillText(l, IMG.PAD, y + size + i * lh));
+  } };
+}
+// Badge + bold title + optional date, then the wrapped text underneath.
+function bNote(st, name, text, date) {
+  const x0 = IMG.PAD + 66;
+  const maxW = IMG.W - IMG.PAD - x0;
+  measureCtx.font = font(28);
+  const lines = wrap(measureCtx, text || 'Nessuna nota', maxW);
+  return { h: 68 + lines.length * 38 + 14, draw(ctx, y) {
+    drawBadge(ctx, st, IMG.PAD, y + 16, 50);
+    ctx.fillStyle = PAL.text;
+    ctx.font = font(29, 700);
+    ctx.fillText(fitText(ctx, name, maxW - (date ? 200 : 0)), x0, y + 50);
+    if (date) {
+      ctx.font = font(24);
+      ctx.fillStyle = PAL.muted;
+      ctx.textAlign = 'right';
+      ctx.fillText(fmtDate(date), IMG.W - IMG.PAD, y + 50);
+      ctx.textAlign = 'left';
+    }
+    ctx.font = font(28);
+    ctx.fillStyle = text ? PAL.text : PAL.muted;
+    lines.forEach((l, i) => ctx.fillText(l, x0, y + 92 + i * 38));
+  } };
+}
+const bRefs = (refs) => ['A', 'N', 'V'].filter((k) => refs[k]).map((k) => bNote(k, STATUS_PLURAL[k], refs[k]));
+const bNoteItem = (n) => bNote(n.obj.status, n.name, n.obj.note, n.obj.date);
+
+function bIntercom(ic) {
+  const gap = 12;
+  const cellH = 92;
+  const cw = (IMG.W - 2 * IMG.PAD - gap * (ic.cols - 1)) / ic.cols;
+  return { h: ic.rows * cellH + (ic.rows - 1) * gap + 30, draw(ctx, y0) {
+    const at = new Map(ic.cells.map((c) => [`${c.r}:${c.c}`, c]));
+    for (let r = 0; r < ic.rows; r++) {
+      for (let col = 0; col < ic.cols; col++) {
+        const x = IMG.PAD + col * (cw + gap);
+        const y = y0 + 14 + r * (cellH + gap);
+        const c = at.get(`${r}:${col}`);
+        rrect(ctx, x, y, cw, cellH, 14);
+        if (!c) {
+          ctx.setLineDash([8, 8]); ctx.strokeStyle = PAL.border; ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]);
+          continue;
+        }
+        const p = c.status ? PAL[c.status] : null;
+        ctx.fillStyle = p ? p[1] : PAL.bg;
+        ctx.fill();
+        ctx.strokeStyle = p ? p[0] : PAL.border;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.fillStyle = p ? p[0] : PAL.text;
+        ctx.font = font(30, 700);
+        ctx.fillText(fitText(ctx, c.label, cw - (c.status ? 76 : 30)), x + 18, y + cellH / 2 + 11);
+        if (c.status) {
+          ctx.font = font(46, 800);
+          ctx.textAlign = 'right';
+          ctx.fillText(c.status, x + cw - 16, y + cellH / 2 + 16);
+          ctx.textAlign = 'left';
+        }
+        if (c.note) { ctx.beginPath(); ctx.arc(x + cw - 12, y + 12, 7, 0, Math.PI * 2); ctx.fillStyle = PAL.primary; ctx.fill(); }
+      }
+    }
+  } };
+}
+
+function drawPlan(ctx, f, x, y, w, h) {
+  rrect(ctx, x, y, w, h, 16);
+  ctx.fillStyle = PAL.soft; ctx.fill();
+  ctx.strokeStyle = PAL.border; ctx.lineWidth = 2; ctx.stroke();
+  ctx.textAlign = 'center';
+  for (const it of f.items) {
+    const cx = x + (it.x / 100) * w;
+    const cy = y + (it.y / 100) * h;
+    if (it.type === 'door') {
+      const d = 64;
+      const p = it.status ? PAL[it.status] : null;
+      rrect(ctx, cx - d / 2, cy - d / 2, d, d, 8);
+      ctx.fillStyle = p ? p[1] : PAL.bg; ctx.fill();
+      ctx.strokeStyle = p ? p[0] : PAL.text; ctx.lineWidth = 3.5; ctx.stroke();
+      ctx.fillStyle = p ? p[0] : PAL.text;
+      if (it.status) { ctx.font = font(34, 800); ctx.fillText(it.status, cx, cy + (it.label ? 5 : 12)); }
+      if (it.label) { ctx.font = font(it.status ? 18 : 24, 700); ctx.fillText(fitText(ctx, it.label, d - 6), cx, it.status ? cy + 26 : cy + 8); }
+      if (!it.status && !it.label) { ctx.beginPath(); ctx.arc(cx + 15, cy + 2, 3.5, 0, Math.PI * 2); ctx.fill(); }
+    } else {
+      const label = it.label || TYPES[it.type];
+      ctx.font = font(19, 600);
+      const tw = Math.min(ctx.measureText(label).width + 20, 170);
+      rrect(ctx, cx - tw / 2, cy - 18, tw, 36, 9);
+      ctx.fillStyle = PAL.bg; ctx.fill();
+      ctx.setLineDash([6, 5]); ctx.strokeStyle = PAL.muted; ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = PAL.muted;
+      ctx.fillText(fitText(ctx, label, tw - 10), cx, cy + 7);
+    }
+  }
+  ctx.textAlign = 'left';
+}
+// One floor: plan on the left, its door notes on the right.
+function bFloor(f) {
+  const planW = 390;
+  const planH = 520;
+  const top = 66;
+  const colX = IMG.PAD + planW + 36;
+  const textX = colX + 54;
+  const textW = IMG.W - IMG.PAD - textX;
+  measureCtx.font = font(26);
+  const entries = doorsOf(f).filter(hasNoteOrV).sort(doorCmp).map((d) => ({ d, lines: wrap(measureCtx, d.note || 'Nessuna nota', textW) }));
+  const colH = entries.reduce((s, e) => s + 50 + e.lines.length * 34 + 16, 0);
+  return { h: top + Math.max(planH, colH) + 40, draw(ctx, y) {
+    ctx.fillStyle = PAL.text;
+    ctx.font = font(32, 800);
+    ctx.fillText(f.label, IMG.PAD, y + 46);
+    drawPills(ctx, countList(doorsOf(f)), y + 14);
+    drawPlan(ctx, f, IMG.PAD, y + top, planW, planH);
+    let yy = y + top;
+    if (!entries.length) { ctx.font = font(26); ctx.fillStyle = PAL.muted; ctx.fillText('Nessuna nota su questo piano.', colX, yy + 32); }
+    for (const e of entries) {
+      drawBadge(ctx, e.d.status, colX, yy + 4, 42);
+      ctx.fillStyle = PAL.text;
+      ctx.font = font(27, 700);
+      ctx.fillText(fitText(ctx, doorName(e.d), textW), textX, yy + 34);
+      ctx.font = font(26);
+      ctx.fillStyle = e.d.note ? PAL.text : PAL.muted;
+      e.lines.forEach((l, i) => ctx.fillText(l, textX, yy + 72 + i * 34));
+      yy += 50 + e.lines.length * 34 + 16;
+    }
+  } };
+}
+
+function drawHeader(ctx, title, subLines, pageInfo) {
+  ctx.fillStyle = PAL.primary;
+  ctx.fillRect(0, 0, IMG.W, 14);
+  ctx.fillStyle = PAL.text;
+  ctx.font = font(46, 800);
+  ctx.fillText(fitText(ctx, title, IMG.W - 2 * IMG.PAD - (pageInfo ? 100 : 0)), IMG.PAD, 88);
+  if (pageInfo) {
+    ctx.font = font(26, 600); ctx.fillStyle = PAL.muted; ctx.textAlign = 'right';
+    ctx.fillText(pageInfo, IMG.W - IMG.PAD, 86);
+    ctx.textAlign = 'left';
+  }
+  ctx.font = font(27);
+  ctx.fillStyle = PAL.muted;
+  subLines.forEach((l, i) => ctx.fillText(fitText(ctx, l, IMG.W - 2 * IMG.PAD), IMG.PAD, 132 + i * 38));
+}
+function drawFooter(ctx, H) {
+  const y = H - 40;
+  ctx.strokeStyle = PAL.border; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(IMG.PAD, H - 84); ctx.lineTo(IMG.W - IMG.PAD, H - 84); ctx.stroke();
+  let x = IMG.PAD;
+  for (const k of ['A', 'N', 'V']) {
+    drawBadge(ctx, k, x, y - 26, 34);
+    x += 44;
+    ctx.font = font(22); ctx.fillStyle = PAL.muted;
+    ctx.fillText(STATUS[k], x, y);
+    x += ctx.measureText(STATUS[k]).width + 26;
+  }
+  ctx.font = font(22, 600); ctx.textAlign = 'right';
+  ctx.fillText(`Smemorapp · ${fmtDate(now())}`, IMG.W - IMG.PAD, y);
+  ctx.textAlign = 'left';
+}
+
+// Split blocks into pages no taller than MAX_H and draw each page to a PNG blob.
+async function renderPages(title, subLines, blocks) {
+  const headH = 112 + subLines.length * 38 + 10;
+  const footH = 104;
+  const pages = [];
+  let page = [];
+  let used = 0;
+  blocks.forEach((bl, i) => {
+    let need = bl.h;
+    for (let j = i; blocks[j] && blocks[j].keep && blocks[j + 1]; j++) need += blocks[j + 1].h; // keep titles with what follows
+    if (page.length && used + need > IMG.MAX_H) { pages.push(page); page = []; used = 0; }
+    page.push(bl);
+    used += bl.h;
+  });
+  if (page.length || !pages.length) pages.push(page);
+  return Promise.all(pages.map((bls, i) => {
+    const H = headH + bls.reduce((s, b) => s + b.h, 0) + footH;
+    const canvas = document.createElement('canvas');
+    canvas.width = IMG.W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = PAL.bg;
+    ctx.fillRect(0, 0, IMG.W, H);
+    ctx.textBaseline = 'alphabetic';
+    drawHeader(ctx, title, subLines, pages.length > 1 ? `${i + 1}/${pages.length}` : '');
+    let y = headH;
+    for (const b of bls) { b.draw(ctx, y); y += b.h; }
+    drawFooter(ctx, H);
+    return new Promise((res, rej) => canvas.toBlob((bl) => (bl ? res(bl) : rej(new Error('toBlob'))), 'image/png'));
+  }));
+}
+
+function civicoBlocks(b) {
+  const blocks = [];
+  if (b.intercom.cells.length) {
+    blocks.push(bSection('Citofono', countList(b.intercom.cells)), bIntercom(b.intercom), ...bRefs(intercomRefs(b)));
+    const ns = intercomNotes(b);
+    if (ns.length) blocks.push(bSub('Note del citofono'), ...ns.map(bNoteItem));
+  }
+  if (b.floors.length) {
+    blocks.push(bSection('Piani', countList(b.floors.flatMap(doorsOf))), ...bRefs(floorRefs(b)));
+    sortedFloors(b).forEach((f) => blocks.push(bFloor(f)));
+  }
+  if (!blocks.length) blocks.push(bText('Nessuno schema ancora.', 28, PAL.muted));
+  return blocks;
+}
+function mapBlocks(m) {
+  const blocks = [];
+  if (m.streets.length) {
+    blocks.push(bSection('Vie e civici'));
+    m.streets.forEach((s) => blocks.push(bText(`${s.name}${s.civici ? ': ' + s.civici : ''}`, 30)));
+  }
+  const bs = mapBuildings(m);
+  blocks.push(bSection(`Civici annotati (${bs.length})`));
+  if (!bs.length) blocks.push(bText('Nessun civico annotato.', 28, PAL.muted));
+  for (const b of bs) {
+    blocks.push(bSection(b.name, countList(allMarks(b)), 32));
+    const parts = [];
+    if (b.intercom.cells.length) {
+      const inner = [...bRefs(intercomRefs(b)), ...intercomNotes(b).map(bNoteItem)];
+      parts.push(bSub('Citofono'), ...(inner.length ? inner : [bText('Nessun segno.', 26, PAL.muted)]));
+    }
+    if (b.floors.length) {
+      const inner = [...bRefs(floorRefs(b)), ...floorNotes(b).map(bNoteItem)];
+      parts.push(bSub('Piani'), ...(inner.length ? inner : [bText('Nessun segno.', 26, PAL.muted)]));
+    }
+    blocks.push(...(parts.length ? parts : [bText('Nessuno schema ancora.', 26, PAL.muted)]));
+  }
+  return blocks;
+}
+
+const slug = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'smemorapp';
+
+async function buildImages(what) {
+  const files = [];
+  if (what.m) {
+    const m = what.m;
+    const base = slug(mapTitle(m));
+    if (m.hasPhoto) {
+      const src = await photos.get(m.id);
+      if (src) files.push(new File([await (await fetch(src)).blob()], `${base}-foto.jpg`, { type: 'image/jpeg' }));
+    }
+    const subs = [m.streets.map((s) => s.name).filter(Boolean).join(' · '), `Aggiornata il ${fmtDate(m.updatedAt)}`].filter(Boolean);
+    const blobs = await renderPages(mapTitle(m), subs, mapBlocks(m));
+    blobs.forEach((bl, i) => files.push(new File([bl], `${base}-note${blobs.length > 1 ? '-' + (i + 1) : ''}.png`, { type: 'image/png' })));
+  } else {
+    const b = what.b;
+    const m = getM(b.mapId);
+    const subs = [m ? mapTitle(m) : '', b.note, `Aggiornato il ${fmtDate(b.updatedAt)}`].filter(Boolean);
+    const blobs = await renderPages(b.name, subs, civicoBlocks(b));
+    blobs.forEach((bl, i) => files.push(new File([bl], `${slug(b.name)}${blobs.length > 1 ? '-' + (i + 1) : ''}.png`, { type: 'image/png' })));
+  }
+  return files;
+}
+
+// File for another Smemorapp user. Shared as .txt because phones refuse to share .json files.
+async function buildShareFile(what) {
+  const out = { kind: 'smemorapp-share', version: 2, sharedAt: now(), maps: [], buildings: [] };
+  let name;
+  if (what.m) {
+    const m = what.m;
+    out.maps.push(m.hasPhoto ? { ...m, photo: await photos.get(m.id) } : { ...m });
+    out.buildings = mapBuildings(m);
+    name = mapTitle(m);
+  } else {
+    out.buildings = [what.b];
+    name = what.b.name;
+  }
+  return new File([JSON.stringify(out)], `${slug(name)}.smemorapp.txt`, { type: 'text/plain' });
+}
+
+function downloadFiles(files) {
+  files.forEach((f, i) => setTimeout(() => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(f);
+    a.download = f.name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  }, i * 350));
+  toast(files.length === 1 ? 'File scaricato' : `${files.length} file scaricati`);
+}
+// navigator.share must start inside the tap, so files are prepared before the button is enabled.
+function shareOrDownload(files, title) {
+  if (navigator.canShare && navigator.canShare({ files })) {
+    navigator.share({ files, title }).catch((e) => { if (e.name !== 'AbortError') downloadFiles(files); });
+  } else {
+    downloadFiles(files);
+  }
+}
+function copyText(text) {
+  if (!navigator.clipboard) { toast('Copia non disponibile su questo dispositivo'); return; }
+  navigator.clipboard.writeText(text).then(() => toast('Testo copiato: incollalo dove vuoi'), () => toast('Impossibile copiare il testo'));
+}
+function shareText(text, title) {
+  if (navigator.share) navigator.share({ title, text }).catch((e) => { if (e.name !== 'AbortError') copyText(text); });
+  else copyText(text);
+}
+
+function sheetShare(what) {
+  const title = what.m ? mapTitle(what.m) : what.b.name;
+  openSheet(`
+    <h2>Condividi ${esc(title)}</h2>
+    <div class="share-opt">
+      <h3>Per chi non usa l'app</h3>
+      <p class="muted small">Immagini con ${what.m ? 'la foto della piantina e il riepilogo di tutti i civici' : 'lo schema del citofono e dei piani'}, gli A, N, V e tutte le note. Tocca un'anteprima per ingrandirla.</p>
+      <div class="share-previews" id="sh-prev"><span class="muted small">Preparo le immagini…</span></div>
+      <button class="btn primary" data-act="sh-img" disabled>${I.image} Condividi immagini</button>
+      <button class="btn" data-act="sh-text">${I.text} Condividi come testo</button>
+    </div>
+    <div class="share-opt">
+      <h3>Per chi usa Smemorapp</h3>
+      <p class="muted small">Un file da aprire in Smemorapp con il pulsante ${I.inbox} "Importa note ricevute" nella prima pagina. Vedrà tutto come te e potrà continuare a segnare.</p>
+      <button class="btn" data-act="sh-file">${I.download} Condividi file per l'app</button>
+    </div>
+    <div class="sheet-actions"><button class="btn" data-act="cancel">Chiudi</button></div>`, (sh) => {
+    const prev = $('#sh-prev', sh);
+    const imgBtn = $('[data-act="sh-img"]', sh);
+    const urls = [];
+    let imgFiles = null;
+    let appFile = null;
+    buildImages(what).then((files) => {
+      imgFiles = files;
+      if (!sh.isConnected) return;
+      prev.innerHTML = files.map((f, i) => {
+        const u = URL.createObjectURL(f);
+        urls.push(u);
+        return `<button type="button" class="share-thumb" data-i="${i}" aria-label="Ingrandisci immagine ${i + 1}"><img src="${u}" alt=""></button>`;
+      }).join('');
+      imgBtn.disabled = false;
+      imgBtn.innerHTML = `${I.image} Condividi ${files.length === 1 ? "l'immagine" : `${files.length} immagini`}`;
+    }).catch((e) => {
+      console.error(e);
+      prev.innerHTML = '<span class="muted small">Impossibile creare le immagini su questo dispositivo.</span>';
+    });
+    buildShareFile(what).then((f) => { appFile = f; }).catch(() => {});
+    prev.addEventListener('click', (e) => { const t = e.target.closest('[data-i]'); if (t) openPhotoViewer(urls[+t.dataset.i]); });
+    on(sh, 'sh-img', () => { if (imgFiles) shareOrDownload(imgFiles, title); });
+    on(sh, 'sh-text', () => shareText(what.m ? mapText(what.m) : civicoText(what.b), title));
+    on(sh, 'sh-file', () => { if (appFile) shareOrDownload([appFile], title); else toast('Un attimo, preparo il file…'); });
+  });
+}
+
+// ---------- import: full backup (replaces) or notes received from someone (adds / updates) ----------
+const go = (hash) => { if (location.hash === hash) render(); else location.hash = hash; };
+async function onImportInput(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  let raw;
+  try { raw = JSON.parse(await file.text()); } catch (err) { toast('File non valido'); return; }
+  if (raw && raw.kind === 'smemorapp-share') return importShared(raw);
+  try {
+    const data = normalize(raw);
+    const n = data.buildings.length;
+    const nm = data.maps.length;
+    if (!confirm(`È un backup completo con ${nm} piantin${nm === 1 ? 'a' : 'e'} e ${n} civic${n === 1 ? 'o' : 'i'}. Sostituire TUTTI i dati attuali?`)) return;
+    for (const m of raw.maps || []) {
+      if (typeof m.photo === 'string' && m.photo.startsWith('data:image/')) await photos.set(String(m.id), m.photo);
+    }
+    commit(() => { db = data; }, 'Backup importato', { rerender: false });
+    go('#/');
+  } catch (err) {
+    toast('File non valido');
+  }
+}
+async function importShared(raw) {
+  let data;
+  try { data = normalize(raw); } catch (err) { toast('File non valido'); return; }
+  if (!data.maps.length && !data.buildings.length) { toast('Il file è vuoto'); return; }
+  const have = new Set([...db.maps.map((m) => m.id), ...db.buildings.map((b) => b.id)]);
+  const updates = [...data.maps, ...data.buildings].filter((x) => have.has(x.id)).length;
+  const what = data.maps.length
+    ? `${mapTitle(data.maps[0])} con ${data.buildings.length} civic${data.buildings.length === 1 ? 'o' : 'i'}`
+    : data.buildings.map((b) => b.name).join(', ');
+  if (!confirm(`Note ricevute: ${what}.\nAggiungerle alle tue?${updates ? '\nQuelle che hai già verranno aggiornate con questa versione.' : ''}`)) return;
+  for (const m of raw.maps || []) {
+    if (typeof m.photo === 'string' && m.photo.startsWith('data:image/')) await photos.set(String(m.id), m.photo);
+  }
+  commit(() => {
+    const put = (list, x) => { const i = list.findIndex((y) => y.id === x.id); if (i >= 0) list[i] = x; else list.push(x); };
+    data.maps.forEach((m) => put(db.maps, m));
+    data.buildings.forEach((b) => { if (!getM(b.mapId)) b.mapId = ''; put(db.buildings, b); });
+  }, 'Note importate', { rerender: false });
+  go(data.maps.length ? `#/m/${data.maps[0].id}` : `#/b/${data.buildings[0].id}`);
+}
+
 // ----- settings -----
 function viewSettings() {
   cur = { b: null, f: null };
@@ -1235,7 +1843,7 @@ function viewSettings() {
       Se cancelli i dati del browser o cambi telefono li perdi: fai un backup ogni tanto (include le foto delle piantine).</p>
       <div class="btn-row">
         <button class="btn" data-act="export">${I.download} Esporta backup</button>
-        <label class="btn">${I.upload} Importa backup<input type="file" id="imp" accept="application/json,.json" hidden></label>
+        <label class="btn">${I.upload} Importa backup o note ricevute<input type="file" id="imp" accept=".txt,.json,text/plain,application/json" hidden></label>
       </div>
     </section>
     <section class="panel">
@@ -1254,24 +1862,7 @@ function viewSettings() {
       <p>Elimina tutte le piantine, i civici e le foto da questo dispositivo.</p>
       <button class="btn danger" data-act="wipe-all">${I.trash} Elimina tutti i dati</button>
     </section>`;
-  $('#imp').addEventListener('change', async (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!file) return;
-    try {
-      const raw = JSON.parse(await file.text());
-      const data = normalize(raw);
-      const n = data.buildings.length;
-      const nm = data.maps.length;
-      if (!confirm(`Il backup contiene ${nm} piantin${nm === 1 ? 'a' : 'e'} e ${n} civic${n === 1 ? 'o' : 'i'}. Sostituire i dati attuali?`)) return;
-      for (const m of raw.maps || []) {
-        if (typeof m.photo === 'string' && m.photo.startsWith('data:image/')) await photos.set(String(m.id), m.photo);
-      }
-      commit(() => { db = data; }, 'Backup importato');
-    } catch (err) {
-      toast('File di backup non valido');
-    }
-  });
+  $('#imp').addEventListener('change', onImportInput);
 }
 
 async function exportData() {
