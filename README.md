@@ -11,8 +11,12 @@ Web app (PWA) per il ministero di casa in casa: schemi di **citofoni** e **piane
 1. **Nuovo palazzo** → indirizzo.
 2. **Citofono**: crea lo schema (numero di pulsanti e colonne), scegli lo strumento A/N/V e tocca i pulsanti.
    Tieni premuto un pulsante per aggiungere una nota.
-3. **Piani**: aggiungi i piani partendo da uno schema già pronto (2, 3 o 4 porte, corridoio…).
-   Nel piano trascina porte, scale, ascensore, finestre e riferimenti dove sono davvero; con A/N/V tocca le porte.
+3. **Piani**: tocca il piano in cui sei (8 … 1, T, oppure *Personalizzato* per piani più alti o sotto il piano terra),
+   poi la forma del pianerottolo (quadrato, rettangolo, L, C; *Ruota* le gira).
+   Aggiungi porte, scale, ascensore, finestre e riferimenti e trascinali dove sono davvero; con A/N/V tocca le porte.
+   **Piano successivo** propone il prossimo piano nella direzione in cui stai andando (dal 6 propone il 5,
+   dal piano terra o dal 1° propone quello sopra; puoi cambiarlo) e chiede se mantenere lo stesso schema delle porte:
+   *Sì* copia forma, porte e riferimenti senza i segni, *No* fa scegliere una nuova forma.
    Con le frecce in alto passi al piano sopra o sotto.
 4. **Nuovo giro**: toglie tutti gli A del palazzo e lascia N e V.
 5. Ogni modifica si può annullare dal messaggio in basso.
