@@ -58,21 +58,69 @@ const I = {
   other: '<svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11a7 7 0 0114 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>',
 };
 
-// Ready-made landing layouts. Coordinates are % of the canvas (3:4), doors listed left→right, top→bottom.
-const TEMPLATES = [
-  { id: 'p2', name: '2 porte', items: [['door', 18, 38], ['door', 82, 38], ['stairs', 50, 86]] },
-  { id: 'p2a', name: '2 porte + ascensore', items: [['door', 18, 38], ['door', 82, 38], ['stairs', 30, 86], ['elevator', 70, 86]] },
-  { id: 'p3', name: '3 porte', items: [['door', 50, 12], ['door', 18, 45], ['door', 82, 45], ['stairs', 50, 86]] },
-  { id: 'p3a', name: '3 porte + ascensore', items: [['door', 50, 12], ['door', 18, 45], ['door', 82, 45], ['stairs', 30, 86], ['elevator', 70, 86]] },
-  { id: 'p4a', name: '4 porte + ascensore', items: [['door', 18, 22], ['door', 82, 22], ['elevator', 50, 46], ['door', 18, 62], ['door', 82, 62], ['stairs', 50, 88]] },
-  { id: 'c6', name: 'Corridoio 6 porte', items: [['window', 50, 6], ['door', 18, 20], ['door', 82, 20], ['door', 18, 44], ['door', 82, 44], ['door', 18, 68], ['door', 82, 68], ['stairs', 50, 90]] },
-  { id: 'empty', name: 'Vuoto', items: [] },
-];
+// Landing shapes. The floor canvas is a 300×400 board (3:4). Points are in free units: they are turned by
+// `rot` quarter turns, then fitted in the board with a margin, so doors can sit across the walls.
+// `anchor` is a point inside the shape, where new doors and references appear.
+const SHAPES = {
+  square: { name: 'Quadrato', pts: [[0, 0], [1, 0], [1, 1], [0, 1]], anchor: [0.5, 0.5] },
+  rect: { name: 'Rettangolo', pts: [[0, 0], [1, 0], [1, 1.7], [0, 1.7]], anchor: [0.5, 0.85] },
+  L: { name: 'A L', pts: [[0, 0], [0.45, 0], [0.45, 0.85], [1, 0.85], [1, 1.3], [0, 1.3]], anchor: [0.225, 1.075] },
+  C: { name: 'A C', pts: [[0, 0], [1, 0], [1, 0.42], [0.45, 0.42], [0.45, 0.88], [1, 0.88], [1, 1.3], [0, 1.3]], anchor: [0.225, 0.65] },
+};
+const BOARD = { W: 300, H: 400, M: 34 };
+function shapeGeom(shape, rot) {
+  const s = SHAPES[shape];
+  if (!s) return null;
+  const turn = ([x, y]) => { for (let k = 0; k < (rot || 0); k++) [x, y] = [-y, x]; return [x, y]; }; // clockwise on screen
+  const pts = s.pts.map(turn);
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const w = Math.max(...xs) - minX;
+  const h = Math.max(...ys) - minY;
+  const k = Math.min((BOARD.W - 2 * BOARD.M) / w, (BOARD.H - 2 * BOARD.M) / h);
+  const ox = (BOARD.W - w * k) / 2;
+  const oy = (BOARD.H - h * k) / 2;
+  const fit = (p) => { const [x, y] = turn(p); return [ox + (x - minX) * k, oy + (y - minY) * k]; };
+  return { pts: s.pts.map(fit), anchor: fit(s.anchor) };
+}
+function inPoly(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+// Where a new door or reference appears (% of the canvas): the free spot inside the landing nearest to its anchor.
+function freeSpot(f) {
+  const g = shapeGeom(f.shape, f.rot);
+  const ax = g ? (g.anchor[0] / BOARD.W) * 100 : 50;
+  const ay = g ? (g.anchor[1] / BOARD.H) * 100 : 50;
+  const spots = [];
+  for (let dx = -72; dx <= 72; dx += 18) for (let dy = -65; dy <= 65; dy += 13) spots.push([ax + dx, ay + dy]);
+  const dist = (x, y, px, py) => Math.hypot(x - px, (y - py) * (BOARD.H / BOARD.W)); // % → same scale on both axes
+  const inside = spots.filter(([x, y]) => x >= 8 && x <= 92 && y >= 8 && y <= 92
+    && (!g || inPoly((x / 100) * BOARD.W, (y / 100) * BOARD.H, g.pts)))
+    .sort((p, q) => dist(...p, ax, ay) - dist(...q, ax, ay));
+  if (!inside.length) return [clamp(ax, 8, 92), clamp(ay, 8, 92)];
+  const free = inside.find(([x, y]) => !f.items.some((i) => Math.abs(i.x - x) < 17 && Math.abs(i.y - y) < 12.5));
+  if (free) return free;
+  // landing full: the spot farthest from everything already there
+  const room = ([x, y]) => Math.min(...f.items.map((i) => dist(x, y, i.x, i.y)));
+  return inside.reduce((best, p) => (room(p) > room(best) ? p : best));
+}
+function shapeSVG(shape, rot, cls) {
+  const g = shapeGeom(shape, rot);
+  if (!g) return '';
+  return `<svg class="${cls}" viewBox="0 0 ${BOARD.W} ${BOARD.H}" preserveAspectRatio="none" aria-hidden="true"><polygon points="${g.pts.map((p) => p.map(round1).join(',')).join(' ')}"/></svg>`;
+}
 
 const floorName = (n) => n === 0 ? 'Piano terra' : n < 0 ? (n === -1 ? 'Seminterrato' : `Interrato ${-n}`) : `Piano ${n}`;
 const floorShort = (n) => n === 0 ? 'T' : n < 0 ? `S${-n}` : String(n);
 const mark = (extra = {}) => ({ id: uid(), label: '', status: '', note: '', date: '', ...extra });
-const tplItems = (t) => t.items.map(([type, x, y]) => mark({ type, x, y }));
 
 // ---------- storage ----------
 function normMark(c) {
@@ -128,6 +176,8 @@ function normalize(d) {
         id: String(f.id || uid()),
         num: int(f.num, 0),
         label: String(f.label || floorName(int(f.num, 0))),
+        shape: SHAPES[f.shape] ? f.shape : '',
+        rot: clamp(int(f.rot, 0), 0, 3),
         items: (f.items || []).filter((i) => TYPES[i.type]).map((i) => ({
           ...normMark(i), type: i.type, x: clamp(Number(i.x) || 50, 0, 100), y: clamp(Number(i.y) || 50, 0, 100),
         })),
@@ -273,17 +323,6 @@ function closeSheet() {
   const r = $('#sheet-root');
   r.classList.remove('open');
   r.innerHTML = '';
-}
-function tplPicker(selected) {
-  return `<div class="tpl-grid" id="tpl">${TEMPLATES.map((t) => `<button type="button" class="tpl ${t.id === selected ? 'on' : ''}" data-tpl="${t.id}">${miniCanvas(tplItems(t))}<span>${esc(t.name)}</span></button>`).join('')}</div>`;
-}
-function bindTplPicker(sh, onPick) {
-  $('#tpl', sh).addEventListener('click', (e) => {
-    const t = e.target.closest('[data-tpl]');
-    if (!t) return;
-    $$('.tpl', sh).forEach((x) => x.classList.toggle('on', x === t));
-    onPick(t.dataset.tpl);
-  });
 }
 
 // ---------- rendering ----------
@@ -702,8 +741,8 @@ function bindIntercomDrag(b) {
 function floorsHTML(b) {
   const fl = sortedFloors(b);
   if (!fl.length) {
-    return `<div class="empty-state">${I.layers}<p>Crea i piani partendo da uno schema già pronto, poi sistema porte, scale, ascensore e finestre come li vedi.</p>
-      <button class="btn primary" data-act="floors-add">Aggiungi piani</button></div>`;
+    return `<div class="empty-state floor-start"><p><b>In che piano sei?</b><br>Inizia da dove ti trovi. Poi scegli la forma del pianerottolo e aggiungi le porte.</p>
+      ${floorGridHTML(b)}</div>`;
   }
   return `<div class="floor-list">${fl.map((f) => `
       <a class="floor-row" href="#/b/${b.id}/f/${f.id}">
@@ -714,8 +753,19 @@ function floorsHTML(b) {
         <span class="chev">${I.chev}</span>
       </a>`).join('')}</div>
     ${countsLine(fl.flatMap(doorsOf))}
-    <div class="row-actions"><button class="btn small" data-act="floors-add">${I.plus} Aggiungi piani</button></div>
+    <div class="row-actions"><button class="btn small" data-act="floor-new">${I.plus} Aggiungi piano</button></div>
     ${notesHTML(floorNotes(b))}`;
+}
+
+// Elevator-like panel: 8 … 1, T. Floors already made are greyed out.
+function floorGridHTML(b) {
+  const taken = new Set(b.floors.map((f) => f.num));
+  return `<div class="floor-grid">${[8, 7, 6, 5, 4, 3, 2, 1, 0].map((n) => `
+      <button type="button" class="fg" data-act="fg-pick" data-n="${n}" ${taken.has(n) ? 'disabled' : ''} aria-label="${esc(floorName(n))}">
+        ${floorShort(n)}${taken.has(n) ? '<small>c\'è già</small>' : n === 0 ? '<small>terra</small>' : ''}</button>`).join('')}
+    </div>
+    <button type="button" class="btn fg-custom" data-act="fg-custom">Personalizzato…</button>
+    <p class="muted small fg-hint">Per piani sopra l'8° o sotto il piano terra.</p>`;
 }
 
 // ----- floor editor -----
@@ -727,8 +777,6 @@ function itemHTML(i) {
   }
   return `<div class="item lm lm-${i.type}" data-id="${i.id}" style="${pos}" role="button" aria-label="${esc(i.label || TYPES[i.type])}">${I[i.type] || I.other}<span class="lbl">${esc(i.label || TYPES[i.type])}</span></div>`;
 }
-const miniCanvas = (items) => `<div class="canvas mini" aria-hidden="true">${items.map(itemHTML).join('')}</div>`;
-
 function viewFloor(b, f) {
   cur = { b, f };
   if (ui.brush === 'move') ui.brush = 'edit'; // on the landing, "Sposta" is the edit tool itself
@@ -740,17 +788,16 @@ function viewFloor(b, f) {
   topbar({ title: f.label, back: `#/b/${b.id}`, actions: `<button class="icon-btn" data-act="floor-menu" aria-label="Opzioni piano">${I.more}</button>` });
   $('#view').innerHTML = `
     <p class="subtitle">${esc(b.name)}</p>
-    <div class="floor-nav">
-      ${up ? `<a class="btn small" href="#/b/${b.id}/f/${up.id}" aria-label="Piano sopra">${I.up}<span>${esc(up.label)}</span></a>`
-        : `<button class="btn small add-floor" data-act="floor-quick" aria-label="Aggiungi ${esc(floorName(f.num + 1))} uguale a questo">${I.plus}<span>${esc(floorName(f.num + 1))}</span></button>`}
-      <button class="btn small icon-only" data-act="floor-plus" aria-label="Aggiungi piano" title="Aggiungi piano">${I.plus}</button>
+    ${up || down ? `<div class="floor-nav">
+      ${up ? `<a class="btn small" href="#/b/${b.id}/f/${up.id}" aria-label="Piano sopra">${I.up}<span>${esc(up.label)}</span></a>` : '<span></span>'}
       ${down ? `<a class="btn small" href="#/b/${b.id}/f/${down.id}" aria-label="Piano sotto"><span>${esc(down.label)}</span>${I.down}</a>` : '<span></span>'}
-    </div>
+    </div>` : ''}
     ${brushBar('floor')}
-    <div class="canvas" id="canvas">${f.items.map(itemHTML).join('')}</div>
+    <div class="addbar" role="toolbar" aria-label="Aggiungi al pianerottolo">${Object.keys(TYPES).map((t) => `<button class="add-item" data-act="add-item" data-type="${t}">${I.plus}${I[t]}<span>${TYPES[t]}</span></button>`).join('')}</div>
+    <div class="canvas" id="canvas">${shapeSVG(f.shape, f.rot, 'shape')}${f.items.map(itemHTML).join('')}
+      ${f.items.length ? '' : '<p class="canvas-empty">Aggiungi porte, scale, ascensore… con i pulsanti qui sopra, poi trascinali al loro posto.</p>'}</div>
     ${countsLine(doorsOf(f))}
-    <p class="section-label">Aggiungi al pianerottolo</p>
-    <div class="addbar">${Object.keys(TYPES).map((t) => `<button class="add-item" data-act="add-item" data-type="${t}">${I[t]}<span>${TYPES[t]}</span></button>`).join('')}</div>`;
+    <div class="bottom-bar"><button class="btn primary big" data-act="floor-next">Piano successivo ${I.chev}</button></div>`;
   bindCanvas(b, f);
 }
 
@@ -1142,53 +1189,27 @@ const actions = {
     }, 'Pulsante aggiunto');
   },
 
-  'floors-add': () => {
+  // New floor: choose its number (panel 8 … T or Personalizzato), then the shape of the landing.
+  'floor-new': () => {
     const b = cur.b;
-    const next = b.floors.length ? Math.max(...b.floors.map((f) => f.num)) + 1 : 0;
-    let tpl = 'p2';
     openSheet(`
-      <h2>Aggiungi piani</h2>
-      <div class="grid2">
-        <label class="field"><span>Dal piano</span><input id="f-from" type="number" inputmode="numeric" value="${next}"></label>
-        <label class="field"><span>Al piano</span><input id="f-to" type="number" inputmode="numeric" value="${b.floors.length ? next : 4}"></label>
-      </div>
-      <p class="muted small">0 = piano terra, −1 = seminterrato.</p>
-      <div class="field"><span>Schema del pianerottolo (poi lo puoi modificare)</span>${tplPicker(tpl)}</div>
-      <label class="check"><input type="checkbox" id="f-num"> Numera le porte in sequenza da <input id="f-start" class="inline-num" type="number" inputmode="numeric" value="1"></label>
-      <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button><button class="btn primary" data-act="ok">Aggiungi</button></div>`, (sh) => {
-      bindTplPicker(sh, (id) => { tpl = id; });
-      on(sh, 'ok', () => {
-        let a = int($('#f-from', sh).value, 0);
-        let z = int($('#f-to', sh).value, a);
-        if (z < a) [a, z] = [z, a];
-        if (z - a >= 60) { toast('Massimo 60 piani alla volta'); return; }
-        const t = TEMPLATES.find((x) => x.id === tpl);
-        const num = $('#f-num', sh).checked;
-        let n = int($('#f-start', sh).value, 1);
-        const created = [];
-        closeSheet();
-        commit(() => {
-          for (let k = a; k <= z; k++) {
-            const items = tplItems(t);
-            if (num) items.filter((i) => i.type === 'door').forEach((d) => { d.label = String(n++); });
-            const f = { id: uid(), num: k, label: floorName(k), items };
-            b.floors.push(f);
-            created.push(f);
-          }
-          touch(b);
-        }, created.length === 1 ? 'Piano aggiunto' : `${z - a + 1} piani aggiunti`, { rerender: created.length !== 1 });
-        if (created.length === 1) location.hash = `#/b/${b.id}/f/${created[0].id}`;
-      });
+      <h2>Aggiungi piano</h2>
+      <p class="muted small">Quale piano?</p>
+      ${floorGridHTML(b)}
+      <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button></div>`, (sh) => {
+      on(sh, 'fg-pick', (el) => actions['fg-pick'](el));
+      on(sh, 'fg-custom', () => actions['fg-custom']());
     });
   },
+  'fg-pick': (el) => sheetShape(cur.b, { num: int(el.dataset.n, 0) }),
+  'fg-custom': () => sheetCustomFloor(cur.b),
+  'floor-next': () => sheetNextFloor(cur.b, cur.f),
 
   'add-item': (el) => {
     const { b, f } = cur;
     const type = el.dataset.type;
-    // place in the middle, nudged so a new item does not hide an existing one
-    let x = 50, y = 50, tries = 0;
-    while (tries++ < 12 && f.items.some((i) => Math.abs(i.x - x) < 8 && Math.abs(i.y - y) < 6)) { x = 50 + ((tries % 3) - 1) * 18; y = 50 + Math.ceil(tries / 3) * 8 * (tries % 2 ? 1 : -1); }
-    const it = mark({ type, x: clamp(x, 8, 92), y: clamp(y, 8, 92) });
+    const [x, y] = freeSpot(f);
+    const it = mark({ type, x: round1(x), y: round1(y) });
     commit(() => { f.items.push(it); touch(b); }, `Aggiunto: ${TYPES[type]}. Trascina per posizionare`);
     if (type === 'other') sheetLandmark(b, f, it);
   },
@@ -1203,8 +1224,7 @@ const actions = {
       </div>
       <div class="sheet-actions" style="margin-top:4px"><button class="btn primary small" data-act="ok">Salva nome e numero</button></div>
       <div class="menu-list">
-        <button class="btn" data-act="fm-template">${I.layout} Cambia schema del pianerottolo</button>
-        <button class="btn" data-act="fm-dup">${I.copy} Copia questa disposizione su un nuovo piano</button>
+        <button class="btn" data-act="fm-shape">${I.layout} ${f.shape ? 'Cambia' : 'Scegli'} la forma del pianerottolo</button>
         <button class="btn danger" data-act="fm-del">${I.trash} Elimina piano</button>
       </div>`, (sh) => {
       const numIn = $('#fm-num', sh);
@@ -1216,30 +1236,13 @@ const actions = {
         closeSheet();
         commit(() => { f.num = n; f.label = label; touch(b); }, 'Piano aggiornato');
       });
-      on(sh, 'fm-template', () => sheetTemplate(b, f));
-      on(sh, 'fm-dup', () => { closeSheet(); copyFloor(b, f, topFloorNum(b) + 1); });
+      on(sh, 'fm-shape', () => sheetShape(b, { floor: f }));
       on(sh, 'fm-del', () => {
         if (!confirm(`Eliminare "${f.label}"?`)) return;
         closeSheet();
         commit(() => { b.floors = b.floors.filter((x) => x !== f); touch(b); }, 'Piano eliminato', { rerender: false });
         location.hash = `#/b/${b.id}`;
       });
-    });
-  },
-
-  'floor-quick': () => copyFloor(cur.b, cur.f, cur.f.num + 1),
-  'floor-plus': () => {
-    const { b, f } = cur;
-    const n = topFloorNum(b) + 1;
-    openSheet(`
-      <h2>Aggiungi piano</h2>
-      <div class="menu-list">
-        <button class="btn" data-act="fp-copy">${I.copy} ${esc(floorName(n))} uguale a ${esc(f.label)}</button>
-        <button class="btn" data-act="fp-tpl">${I.layout} Scegli uno schema o più piani…</button>
-      </div>
-      <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button></div>`, (sh) => {
-      on(sh, 'fp-copy', () => { closeSheet(); copyFloor(b, f, n); });
-      on(sh, 'fp-tpl', () => actions['floors-add']());
     });
   },
 
@@ -1262,38 +1265,125 @@ const actions = {
   },
 };
 
-const topFloorNum = (b) => Math.max(...b.floors.map((x) => x.num));
+// ----- creating floors -----
+// Which way you are going through the building: from the last two floors created. With one floor only,
+// from the ground floor or the 1st you go up, from higher floors you go down.
+function floorStep(b, f) {
+  const fl = b.floors;
+  if (fl.length >= 2) return Math.sign(fl[fl.length - 1].num - fl[fl.length - 2].num) || -1;
+  return f.num <= 1 ? 1 : -1;
+}
+// The first floor number after `f`, in that direction, that does not exist yet.
+function nextFloorNum(b, f) {
+  const taken = new Set(b.floors.map((x) => x.num));
+  const step = floorStep(b, f);
+  let n = f.num + step;
+  for (let k = 0; taken.has(n) && k < 200; k++) n += step;
+  return n;
+}
 
-// New floor `num` with the same layout as `f` (no marks). Numeric door labels continue the sequence.
-function copyFloor(b, f, num) {
-  const doors = doorsOf(f);
-  const shift = doors.length * (num - f.num);
-  const numeric = doors.length && doors.every((d) => /^\d+$/.test(d.label) && int(d.label, 0) + shift > 0);
-  const nf = {
-    id: uid(), num, label: floorName(num),
-    items: f.items.map((i) => mark({
-      type: i.type, x: i.x, y: i.y,
-      label: i.type !== 'door' ? i.label : numeric ? String(int(i.label, 0) + shift) : '',
-    })),
-  };
+function addFloor(b, nf) {
+  nf.id = uid();
   commit(() => { b.floors.push(nf); touch(b); }, `Creato ${nf.label}`, { rerender: false });
   location.hash = `#/b/${b.id}/f/${nf.id}`;
 }
 
-function sheetTemplate(b, f) {
-  let tpl = null;
+// New floor `num` with the same landing as `f` (no marks). Numeric door labels continue the sequence.
+function copyFloor(b, f, num) {
+  const doors = doorsOf(f);
+  const shift = doors.length * (num - f.num);
+  const numeric = doors.length && doors.every((d) => /^\d+$/.test(d.label) && int(d.label, 0) + shift > 0);
+  addFloor(b, {
+    num, label: floorName(num), shape: f.shape, rot: f.rot,
+    items: f.items.map((i) => mark({
+      type: i.type, x: i.x, y: i.y,
+      label: i.type !== 'door' ? i.label : numeric ? String(int(i.label, 0) + shift) : '',
+    })),
+  });
+}
+
+// − Piano 5 +  : picks a floor number and says when that floor already exists.
+const numStepHTML = () => `
+  <div class="num-step">
+    <button type="button" class="btn" data-d="-1" aria-label="Un piano più giù">−</button>
+    <output id="ns-out" aria-live="polite"></output>
+    <button type="button" class="btn" data-d="1" aria-label="Un piano più su">+</button>
+  </div>
+  <p class="warn" id="ns-warn" hidden></p>`;
+function bindNumStep(sh, b, n, onChange) {
+  const taken = new Set(b.floors.map((x) => x.num));
+  const show = () => {
+    const t = taken.has(n);
+    $('#ns-out', sh).textContent = floorName(n);
+    $('#ns-warn', sh).hidden = !t;
+    $('#ns-warn', sh).textContent = t ? `${floorName(n)} c'è già: scegli un altro piano.` : '';
+    onChange(n, t);
+  };
+  $('.num-step', sh).addEventListener('click', (e) => {
+    const t = e.target.closest('[data-d]');
+    if (!t) return;
+    n = clamp(n + int(t.dataset.d, 0), -9, 99);
+    show();
+  });
+  show();
+}
+
+function sheetCustomFloor(b) {
+  const taken = new Set(b.floors.map((x) => x.num));
+  let n = 9;
+  while (taken.has(n)) n++;
+  let free = true;
   openSheet(`
-    <h2>Cambia schema del pianerottolo</h2>
-    <p class="muted small">Sostituisce porte e riferimenti di ${esc(f.label)}. I segni di questo piano verranno tolti.</p>
-    ${tplPicker(null)}
-    <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button><button class="btn primary" data-act="ok">Applica</button></div>`, (sh) => {
-    bindTplPicker(sh, (id) => { tpl = id; });
-    on(sh, 'ok', () => {
-      if (!tpl) { toast('Scegli uno schema'); return; }
-      const t = TEMPLATES.find((x) => x.id === tpl);
+    <h2>Piano personalizzato</h2>
+    <p class="muted small">Con + e − arrivi ai piani sopra l'8° o sotto il piano terra (Seminterrato, Interrato 2…).</p>
+    ${numStepHTML()}
+    <label class="field"><span>Nome (facoltativo)</span><input id="cf-label" maxlength="30" autocomplete="off" placeholder="es. Rialzato, Attico"></label>
+    <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button><button class="btn primary" data-act="ok">Avanti</button></div>`, (sh) => {
+    bindNumStep(sh, b, n, (v, t) => { n = v; free = !t; $('[data-act="ok"]', sh).disabled = t; });
+    on(sh, 'ok', () => { if (free) sheetShape(b, { num: n, label: $('#cf-label', sh).value.trim() }); });
+  });
+}
+
+// Shape of the landing. Tapping one creates floor `num`, or changes the shape of `floor` (its doors stay put).
+function sheetShape(b, { num, label, floor }) {
+  let rot = floor ? floor.rot : 0;
+  const current = floor ? floor.shape : '';
+  const tiles = () => Object.entries(SHAPES).map(([id, s]) => `
+    <button type="button" class="tpl ${id === current ? 'on' : ''}" data-shape="${id}" aria-label="${esc(s.name)}">${shapeSVG(id, rot, 'shape-prev')}<span>${esc(s.name)}</span></button>`).join('');
+  openSheet(`
+    <h2>Forma del pianerottolo</h2>
+    <p class="muted small">${esc(floor ? floor.label : label || floorName(num))}: ${floor ? 'porte e riferimenti restano dove sono.' : 'tocca la forma, poi aggiungi porte, scale, ascensore…'}</p>
+    <div class="tpl-grid shape-grid" id="sh-grid">${tiles()}</div>
+    <div class="row-actions"><button class="btn small" data-act="sh-rot">${I.refresh} Ruota</button></div>
+    <div class="sheet-actions"><button class="btn" data-act="cancel">Annulla</button></div>`, (sh) => {
+    on(sh, 'sh-rot', () => { rot = (rot + 1) % 4; $('#sh-grid', sh).innerHTML = tiles(); });
+    $('#sh-grid', sh).addEventListener('click', (e) => {
+      const t = e.target.closest('[data-shape]');
+      if (!t) return;
+      const shape = t.dataset.shape;
       closeSheet();
-      commit(() => { f.items = tplItems(t); touch(b); }, 'Schema applicato');
+      if (floor) commit(() => { floor.shape = shape; floor.rot = rot; touch(b); }, 'Forma cambiata');
+      else addFloor(b, { num, label: label || floorName(num), shape, rot, items: [] });
     });
+  });
+}
+
+// "Piano successivo": proposes the next floor the way you are going (you can change it),
+// then asks whether its landing is like this one.
+function sheetNextFloor(b, f) {
+  let n = nextFloorNum(b, f);
+  openSheet(`
+    <h2>Piano successivo</h2>
+    ${numStepHTML()}
+    <p class="nx-q">Mantenere lo stesso schema delle porte?</p>
+    <p class="muted small">Sì: stessa forma, porte e riferimenti di ${esc(f.label)}, senza i segni. No: scegli una nuova forma.</p>
+    <div class="sheet-actions">
+      <button class="btn" data-act="nx-no">No, nuova forma</button>
+      <button class="btn primary" data-act="nx-yes">Sì, uguale</button>
+    </div>`, (sh) => {
+    bindNumStep(sh, b, n, (v, t) => { n = v; $$('[data-act^="nx-"]', sh).forEach((x) => { x.disabled = t; }); });
+    on(sh, 'nx-yes', () => { closeSheet(); copyFloor(b, f, n); });
+    on(sh, 'nx-no', () => sheetShape(b, { num: n }));
   });
 }
 
@@ -1354,7 +1444,7 @@ function mapText(m) {
 // ---------- images for sharing (drawn on a canvas, light colours, 1080 px wide) ----------
 const IMG = { W: 1080, PAD: 48, MAX_H: 2400 };
 const PAL = {
-  bg: '#ffffff', text: '#1d232b', muted: '#5f6b7a', border: '#d6dae1', soft: '#f4f5f7', primary: '#2f5d8a',
+  bg: '#ffffff', text: '#1d232b', muted: '#5f6b7a', border: '#d6dae1', soft: '#f4f5f7', floor: '#e3e7ed', primary: '#2f5d8a',
   A: ['#b45309', '#fef3c7'], N: ['#c81e1e', '#fee2e2'], V: ['#15803d', '#dcfce7'],
 };
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
@@ -1518,6 +1608,14 @@ function drawPlan(ctx, f, x, y, w, h) {
   rrect(ctx, x, y, w, h, 16);
   ctx.fillStyle = PAL.soft; ctx.fill();
   ctx.strokeStyle = PAL.border; ctx.lineWidth = 2; ctx.stroke();
+  const g = shapeGeom(f.shape, f.rot);
+  if (g) {
+    ctx.beginPath();
+    g.pts.forEach(([px, py], i) => ctx[i ? 'lineTo' : 'moveTo'](x + (px / BOARD.W) * w, y + (py / BOARD.H) * h));
+    ctx.closePath();
+    ctx.fillStyle = PAL.floor; ctx.fill();
+    ctx.strokeStyle = PAL.text; ctx.lineWidth = 4; ctx.lineJoin = 'round'; ctx.stroke();
+  }
   ctx.textAlign = 'center';
   for (const it of f.items) {
     const cx = x + (it.x / 100) * w;
